@@ -8,72 +8,36 @@ usage() {
   cat <<USAGE
 Usage: $(basename "$0")
 
-Build a standard ARM64 rootfs disk image from declared inputs.
+Build a rootfs from the Armada OS container image for the Y700.
 
-Required host tools: debootstrap, mount, chroot, mkfs.ext4, e2fsck, tar.
+Extracts the Armada bootc container into a plain ext4 rootfs, strips
+bootc/ostree internals, applies Y700 device overlay and sensor/haptics/camera
+.deb packages, then boots via the existing GRUB chain (no initramfs).
 
 Environment inputs:
   OUTPUT_DIR                 default: out/ci-rootfs
-  OUTPUT_PREFIX              default: <DISTRO>-<ARCH>
-  DISTRO                     default: noble
-  ARCH                       default: arm64
-  MIRROR                     default: http://ports.ubuntu.com/ubuntu-ports
-  DEBOOTSTRAP_VARIANT        default: minbase; set empty for debootstrap default
-  RESOLV_CONF_CONTENT        optional /etc/resolv.conf contents for chroot
-  APT_HTTP_PROXY             optional apt proxy used only during provisioning
-  APT_HTTPS_PROXY            optional apt https proxy; defaults to APT_HTTP_PROXY
-  APT_SOURCES_LIST           optional full sources.list replacement
-  ROOTFS_IMAGE_SIZE          default: 14G
+  OUTPUT_PREFIX              default: armada-y700
+  ARMADA_IMAGE               Armada container image (default: ghcr.io/armada-os/armada:testing)
+  ROOTFS_IMAGE_SIZE          default: 24G
   ROOTFS_UUID                optional ext4 UUID
-  ROOTFS_LABEL               default: Ubuntu
-  ROOTFS_PARTLABEL           metadata only, default: userdata
+  ROOTFS_LABEL               default: Armada
+  ROOTFS_PARTLABEL           default: userdata
   HOSTNAME_NAME              default: y700
-  DEFAULT_USER_NAME          default: y700
-  DEFAULT_USER_PASSWORD      default: 1234
-  ROOT_PASSWORD_MODE         locked|set|empty, default: locked
-  ROOT_PASSWORD              used when ROOT_PASSWORD_MODE=set
-  USER_SUDO_MODE             password|nopasswd|none, default: password
-  SDDM_AUTOLOGIN             enable SDDM autologin for DEFAULT_USER_NAME, default: 0
-  SDDM_AUTOLOGIN_SESSION     SDDM session desktop name, default: plasma
-  TZ_REGION                  default: Asia/Shanghai
-  LOCALES                    default: en_US.UTF-8 UTF-8\nzh_CN.UTF-8 UTF-8
-  LANG_NAME                  default: zh_CN.UTF-8
-  PACKAGE_LIST               newline/space separated packages
-  DESKTOP_ENV                optional package token appended to PACKAGE_LIST
-  OVERLAY_ARCHIVE            optional local path or URL; extracted into rootfs
-  OVERLAY_DIR                optional directory copied into rootfs
-  DEB_ARCHIVE                optional local path or URL containing .deb files
-  DEB_DIR                    optional directory containing .deb files
-  SENSOR_DEB_ARCHIVE         optional local path or URL containing sensor .deb files
-  SENSOR_DEB_DIR             optional directory containing source-built sensor .deb files
-  HAPTICS_DEB_ARCHIVE        optional local path or URL containing haptics .deb files
-  HAPTICS_DEB_DIR            optional directory containing source-built haptics .deb files
-  CAMERA_STACK_DEB_DIR       optional directory containing source-built camera stack .deb files
-  BUILD_TB321FU_GPU_SENSOR   build/install TB321FU KSystemStats Adreno frequency plugin, default: 1
+  DEFAULT_USER_NAME          default: armada
+  DEFAULT_USER_PASSWORD      default: deck
+  SENSOR_DEB_DIR             directory containing sensor .deb files
+  HAPTICS_DEB_DIR            directory containing haptics .deb files
+  CAMERA_STACK_DEB_DIR       directory containing camera stack .deb files
+  BUILD_TB321FU_GPU_SENSOR   build/install TB321FU GPU sensor plugin, default: 1
   TB321FU_GPU_SENSOR_SOURCE_DIR
-                              optional source directory for the plugin; defaults to repo source/
-  INSTALL_GNOME_SNAPSHOT     install GNOME Snapshot camera app, default: 1
-  INSTALL_FIREFOX            install Firefox browser, default: 1
-  INSTALL_FCITX5_CHINESE     install and configure Fcitx 5 Chinese input, default: 1
-  FCITX5_CHINESE_PACKAGES    optional package list for Fcitx 5 Chinese input
-  INSTALL_GAMING_STACK       install Armada gaming stack (Steam/FEX/Proton/Gamescope), default: 0
-  STEAM_CLIENT_URL           optional URL to prebuilt Steam ARM64 client
-  STEAM_RUNTIME_URL          optional URL to SteamRT ARM64 runtime
-  FEX_EMU_VERSION            optional FEX version to install
-  FEX_ROOTFS_URL             FEX Arch Linux rootfs URL
-  PROTON_URL                 CachyOS Proton ARM64 URL
-  GAMESCOPE_URL              optional URL to prebuilt Gamescope
-  GAMESCOPE_SESSION_URL      Gamescope session Steam URL
-  MANGOHUD_URL               optional URL to prebuilt MangoHud
-  DECKY_LOADER_URL           optional URL to Decky Loader
-  INPUTPLUMBER_URL           optional URL to InputPlumber
-  DISABLE_SNAPD              purge snapd and snap integration from rootfs, default: 1
-  APPLY_Y700_FIRMWARE_FIXES  copy/verify required Y700 firmware paths only, default: 1
+                              optional source directory for the plugin
+  TB321FU_GPU_SENSOR_BUILD_JOBS
+                              parallel build jobs, default: 2
+  APPLY_Y700_FIRMWARE_FIXES  copy/verify required Y700 firmware paths, default: 1
   APPLY_Y700_AUDIO_POLICY_FIXES
-                              install Y700 WirePlumber ALSA policy for headset mic, default: 1
-  CLEAN_APT_CACHE            default: 1
+                              install Y700 WirePlumber ALSA policy, default: 1
   COMPRESS                   none|zstd|xz|7z, default: 7z
-  CHUNK_SIZE                 optional 7z volume size; empty disables volumes
+  CHUNK_SIZE                 optional 7z volume size
   KEEP_RAW_IMAGE             keep uncompressed rootfs image after packaging, default: 0
 USAGE
 }
@@ -83,129 +47,119 @@ if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
   exit 0
 fi
 
-ci_require_cmd debootstrap
 ci_require_cmd mkfs.ext4
 ci_require_cmd mount
 ci_require_cmd umount
-ci_require_cmd chroot
 ci_require_cmd e2fsck
 ci_require_cmd rsync
 ci_require_cmd sha256sum
 
-DISTRO=${DISTRO:-noble}
-ARCH=${ARCH:-arm64}
-MIRROR=${MIRROR:-http://ports.ubuntu.com/ubuntu-ports}
-DEBOOTSTRAP_VARIANT=${DEBOOTSTRAP_VARIANT-minbase}
-RESOLV_CONF_CONTENT=${RESOLV_CONF_CONTENT:-}
-APT_HTTP_PROXY=${APT_HTTP_PROXY:-${http_proxy:-${HTTP_PROXY:-}}}
-APT_HTTPS_PROXY=${APT_HTTPS_PROXY:-${https_proxy:-${HTTPS_PROXY:-${APT_HTTP_PROXY:-}}}}
-OUTPUT_PREFIX=${OUTPUT_PREFIX:-${DISTRO}-${ARCH}}
 OUTPUT_DIR=${OUTPUT_DIR:-out/ci-rootfs}
-ROOTFS_IMAGE_SIZE=${ROOTFS_IMAGE_SIZE:-14G}
-ROOTFS_LABEL=${ROOTFS_LABEL:-Ubuntu}
+OUTPUT_PREFIX=${OUTPUT_PREFIX:-armada-y700}
+ARMADA_IMAGE=${ARMADA_IMAGE:-ghcr.io/armada-os/armada:testing}
+ROOTFS_IMAGE_SIZE=${ROOTFS_IMAGE_SIZE:-24G}
+ROOTFS_LABEL=${ROOTFS_LABEL:-Armada}
 ROOTFS_PARTLABEL=${ROOTFS_PARTLABEL:-userdata}
 HOSTNAME_NAME=${HOSTNAME_NAME:-y700}
-DEFAULT_USER_NAME=${DEFAULT_USER_NAME:-y700}
-DEFAULT_USER_PASSWORD=${DEFAULT_USER_PASSWORD:-1234}
-ROOT_PASSWORD_MODE=${ROOT_PASSWORD_MODE:-locked}
-ROOT_PASSWORD=${ROOT_PASSWORD:-}
-USER_SUDO_MODE=${USER_SUDO_MODE:-password}
-SDDM_AUTOLOGIN=${SDDM_AUTOLOGIN:-0}
-SDDM_AUTOLOGIN_SESSION=${SDDM_AUTOLOGIN_SESSION:-plasma}
-TZ_REGION=${TZ_REGION:-Asia/Shanghai}
-LANG_NAME=${LANG_NAME:-zh_CN.UTF-8}
-LOCALES=${LOCALES:-$'en_US.UTF-8 UTF-8\nzh_CN.UTF-8 UTF-8'}
-CLEAN_APT_CACHE=${CLEAN_APT_CACHE:-1}
-APPLY_Y700_FIRMWARE_FIXES=${APPLY_Y700_FIRMWARE_FIXES:-1}
-APPLY_Y700_AUDIO_POLICY_FIXES=${APPLY_Y700_AUDIO_POLICY_FIXES:-1}
+DEFAULT_USER_NAME=${DEFAULT_USER_NAME:-armada}
+DEFAULT_USER_PASSWORD=${DEFAULT_USER_PASSWORD:-deck}
+SENSOR_DEB_DIR=${SENSOR_DEB_DIR:-}
+HAPTICS_DEB_DIR=${HAPTICS_DEB_DIR:-}
+CAMERA_STACK_DEB_DIR=${CAMERA_STACK_DEB_DIR:-}
 BUILD_TB321FU_GPU_SENSOR=${BUILD_TB321FU_GPU_SENSOR:-1}
 TB321FU_GPU_SENSOR_SOURCE_DIR=${TB321FU_GPU_SENSOR_SOURCE_DIR:-}
-INSTALL_GAMING_STACK=${INSTALL_GAMING_STACK:-0}
-INSTALL_GNOME_SNAPSHOT=${INSTALL_GNOME_SNAPSHOT:-1}
-INSTALL_FIREFOX=${INSTALL_FIREFOX:-1}
-INSTALL_FCITX5_CHINESE=${INSTALL_FCITX5_CHINESE:-1}
-FCITX5_CHINESE_PACKAGES=${FCITX5_CHINESE_PACKAGES:-"fonts-noto-cjk im-config fcitx5 fcitx5-chinese-addons fcitx5-pinyin fcitx5-config-qt kde-config-fcitx5 fcitx5-frontend-gtk2 fcitx5-frontend-gtk3 fcitx5-frontend-gtk4 fcitx5-frontend-qt5 fcitx5-frontend-qt6 fcitx5-module-wayland fcitx5-module-xorg fcitx5-module-kimpanel fcitx5-module-emoji fcitx5-material-color"}
-DISABLE_SNAPD=${DISABLE_SNAPD:-1}
+TB321FU_GPU_SENSOR_BUILD_JOBS=${TB321FU_GPU_SENSOR_BUILD_JOBS:-2}
+APPLY_Y700_FIRMWARE_FIXES=${APPLY_Y700_FIRMWARE_FIXES:-1}
+APPLY_Y700_AUDIO_POLICY_FIXES=${APPLY_Y700_AUDIO_POLICY_FIXES:-1}
 COMPRESS=${COMPRESS:-7z}
 CHUNK_SIZE=${CHUNK_SIZE:-}
 KEEP_RAW_IMAGE=${KEEP_RAW_IMAGE:-0}
 
-default_packages="systemd systemd-sysv dbus sudo locales tzdata ca-certificates gnupg curl wget network-manager openssh-server nano vim rsync kmod initramfs-tools"
-PACKAGE_LIST=${PACKAGE_LIST:-$default_packages}
-if [ -n "${DESKTOP_ENV:-}" ]; then
-  PACKAGE_LIST="$PACKAGE_LIST $DESKTOP_ENV"
-fi
-if ci_bool "$INSTALL_GNOME_SNAPSHOT"; then
-  PACKAGE_LIST="$PACKAGE_LIST gnome-snapshot"
-fi
-if ci_bool "$INSTALL_FIREFOX"; then
-  PACKAGE_LIST="$PACKAGE_LIST firefox"
-fi
-if ci_bool "$INSTALL_FCITX5_CHINESE"; then
-  PACKAGE_LIST="$PACKAGE_LIST $FCITX5_CHINESE_PACKAGES"
-fi
-
-configure_mozilla_firefox_repo() {
-  local root=$1
-  local keyring_dir="$root/etc/apt/keyrings"
-  local source_dir="$root/etc/apt/sources.list.d"
-  local pref_dir="$root/etc/apt/preferences.d"
-  local keyring="$keyring_dir/packages.mozilla.org.asc"
-  local key_tmp="$work_dir/packages.mozilla.org.asc"
-
-  ci_log "configuring Mozilla APT repository for non-snap Firefox"
-  install -d -m 0755 "$keyring_dir" "$source_dir" "$pref_dir"
-  ci_download "https://packages.mozilla.org/apt/repo-signing-key.gpg" "$key_tmp"
-  install -m 0644 "$key_tmp" "$keyring"
-
-  cat > "$source_dir/mozilla.list" <<'MOZILLA_APT'
-deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main
-MOZILLA_APT
-  chmod 0644 "$source_dir/mozilla.list"
-
-  cat > "$pref_dir/mozilla-firefox" <<'MOZILLA_PREF'
-Package: firefox firefox-*
-Pin: origin packages.mozilla.org
-Pin-Priority: 1001
-
-Package: firefox
-Pin: version 1:*snap*
-Pin-Priority: -1
-MOZILLA_PREF
-  chmod 0644 "$pref_dir/mozilla-firefox"
-}
-
-include_deb_archive() {
-  local label=$1 src=$2
-  local archive extract copied deb
-
-  [ -n "$src" ] || return 0
-
-  archive="$work_dir/${label}.archive"
-  extract="$work_dir/${label}-debs"
-  rm -rf "$extract"
-  mkdir -p "$rootfs_dir/var/tmp/ci-debs" "$extract"
-
-  ci_log "including $label deb archive: $src"
-  ci_download "$src" "$archive"
-  ci_extract_archive "$archive" "$extract"
-
-  copied=0
-  while IFS= read -r -d '' deb; do
-    cp -a "$deb" "$rootfs_dir/var/tmp/ci-debs/"
-    copied=$((copied + 1))
-  done < <(find "$extract" -type f -name '*.deb' -print0)
-
-  [ "$copied" -gt 0 ] || ci_die "$label deb archive did not contain any .deb files: $src"
-}
-
 mkdir -p "$OUTPUT_DIR"
-work_dir=$(mktemp -d "$OUTPUT_DIR/.rootfs-build.XXXXXX")
+work_dir=$(mktemp -d "$OUTPUT_DIR/.armada-rootfs.XXXXXX")
 rootfs_dir="$work_dir/rootfs"
 rootfs_img="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.img"
-build_info="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.BUILD-INFO.txt"
-manifest="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.manifest"
 mounted=0
+container_id=""
+
+cleanup() {
+  set +e
+  if [ -n "$container_id" ]; then
+    podman rm "$container_id" >/dev/null 2>&1 || true
+  fi
+  if [ "$mounted" = 1 ]; then
+    for p in dev/pts dev proc sys run; do
+      mountpoint -q "$rootfs_dir/$p" && umount -l "$rootfs_dir/$p"
+    done
+    mountpoint -q "$rootfs_dir" && umount "$rootfs_dir"
+  fi
+  rm -rf "$work_dir"
+}
+trap cleanup EXIT
+
+# ── Phase 1: Extract Armada container image ─────────────────────────────
+
+ci_require_cmd podman
+
+ci_log "pulling Armada container image: $ARMADA_IMAGE"
+podman pull "$ARMADA_IMAGE"
+
+ci_log "creating container from image"
+container_id=$(podman create "$ARMADA_IMAGE" /bin/true)
+
+ci_log "creating ext4 image: $rootfs_img"
+rm -f "$rootfs_img"
+truncate -s "$ROOTFS_IMAGE_SIZE" "$rootfs_img"
+mkfs_args=(-F -L "$ROOTFS_LABEL")
+if [ -n "${ROOTFS_UUID:-}" ]; then
+  mkfs_args+=(-U "$ROOTFS_UUID")
+fi
+mkfs.ext4 "${mkfs_args[@]}" "$rootfs_img"
+
+mkdir -p "$rootfs_dir"
+mount -o loop "$rootfs_img" "$rootfs_dir"
+mounted=1
+
+ci_log "exporting container filesystem"
+mkdir -p "$work_dir/container-export"
+podman export "$container_id" | tar -C "$rootfs_dir" -xf -
+
+# ── Phase 2: Strip bootc/ostree internals ──────────────────────────────
+
+ci_log "stripping bootc/ostree internals"
+
+# Remove ostree directories
+rm -rf \
+  "$rootfs_dir/sysroot" \
+  "$rootfs_dir/ostree" \
+  "$rootfs_dir/var/lib/ostree" \
+  "$rootfs_dir/var/lib/bootc"
+
+# Mask bootc/ostree systemd services
+ostree_units=(
+  ostree-prepare-root.service
+  ostree-remount.service
+  bootc-install.service
+  bootc-fetch-atomic-updates.service
+  rpm-ostreed.service
+  rpm-ostreed-automatic.timer
+)
+for unit in "${ostree_units[@]}"; do
+  svc_path="$rootfs_dir/etc/systemd/system/$unit"
+  mkdir -p "$(dirname "$svc_path")"
+  ln -sf /dev/null "$svc_path"
+done
+
+# Disable SELinux (no policy for Y700)
+if [ -f "$rootfs_dir/etc/selinux/config" ]; then
+  sed -i 's/^SELINUX=enforcing/SELINUX=disabled/' "$rootfs_dir/etc/selinux/config"
+  sed -i 's/^SELINUX=permissive/SELINUX=disabled/' "$rootfs_dir/etc/selinux/config"
+fi
+
+# Remove ostree configuration
+rm -rf "$rootfs_dir/etc/ostree"
+
+# ── Phase 3: Y700 device overlay ───────────────────────────────────────
 
 apply_y700_firmware_fixes() {
   local root=$1
@@ -225,8 +179,6 @@ apply_y700_firmware_fixes() {
     install -m 0644 "$root/$source_rel" "$root/$dest_rel"
   }
 
-  # The device overlay stores some firmware under /usr/lib/firmware or vendor-specific
-  # subdirectories, while the kernel requests the canonical /lib/firmware/qcom paths.
   local src dst
   for src in \
     usr/lib/firmware/qcom/sm8650/lenovo/tb321fu/gen70900_zap.mbn \
@@ -262,10 +214,9 @@ apply_y700_firmware_fixes() {
   )
   local rel
   for rel in "${required[@]}"; do
-    [ -e "$root/$rel" ] || [ -L "$root/$rel" ] || ci_die "missing Y700 required compatibility file: $rel"
+    [ -e "$root/$rel" ] || [ -L "$root/$rel" ] || ci_die "missing Y700 required firmware: $rel"
   done
 }
-
 
 apply_y700_audio_policy_fixes() {
   local root=$1
@@ -297,44 +248,12 @@ monitor.alsa.rules = [
 CONF
   chmod 0644 "$conf"
   chown 0:0 "$conf" 2>/dev/null || true
-
-  grep -q 'api.acp.auto-profile = true' "$conf" || ci_die "Y700 ALSA policy missing auto-profile=true"
-  grep -q 'api.acp.auto-port = true' "$conf" || ci_die "Y700 ALSA policy missing auto-port=true"
-  grep -q 'api.alsa.split-enable = false' "$conf" || ci_die "Y700 ALSA policy missing split-enable=false"
-}
-
-apply_sddm_autologin() {
-  local root=$1
-  local conf_dir="$root/etc/sddm.conf.d"
-  local conf="$conf_dir/zz-tb321fu-autologin.conf"
-  local session=${SDDM_AUTOLOGIN_SESSION%.desktop}
-
-  rm -f "$conf" "$conf_dir/30-autologin.conf" "$conf_dir/10-y700-autologin.conf"
-
-  if ! ci_bool "$SDDM_AUTOLOGIN"; then
-    ci_log "SDDM autologin disabled"
-    return 0
-  fi
-
-  ci_log "enabling SDDM autologin for $DEFAULT_USER_NAME"
-  install -d -m 0755 "$conf_dir"
-  cat > "$conf" <<CONF
-[Autologin]
-User=$DEFAULT_USER_NAME
-Session=$session
-Relogin=false
-CONF
-  chmod 0644 "$conf"
-  chown 0:0 "$conf" 2>/dev/null || true
-
-  grep -q "^User=$DEFAULT_USER_NAME$" "$conf" || ci_die "SDDM autologin user was not written"
-  grep -q "^Session=$session$" "$conf" || ci_die "SDDM autologin session was not written"
 }
 
 apply_tb321fu_legacy_cleanup() {
   local root=$1
 
-  ci_log "removing legacy y700 sensor and haptics glue that conflicts with TB321FU packages"
+  ci_log "removing legacy y700 sensor and haptics glue"
   rm -f \
     "$root/etc/systemd/system/iio-sensor-proxy.service.d/10-y700-ssc.conf" \
     "$root/etc/systemd/system/y700-sns-init.service" \
@@ -376,14 +295,89 @@ DBUS_SERVICE
   fi
 }
 
+ci_log "applying Y700 device overlay"
+
+# Overlay the armada-gaming-overlay (device config, session scripts)
+overlay_dir="${SCRIPT_DIR}/../../source/armada-gaming-overlay"
+if [ -d "$overlay_dir" ]; then
+  rsync -aH --numeric-ids "$overlay_dir"/ "$rootfs_dir"/
+fi
+
+# Ensure Y700 DTB is in supported-dtbs
+dtb_name="sm8650-lenovo-tb321fu"
+supported_dtbs="$rootfs_dir/usr/lib/armada/supported-dtbs"
+if [ -f "$supported_dtbs" ]; then
+  if ! grep -q "^${dtb_name}$" "$supported_dtbs"; then
+    echo "$dtb_name" >> "$supported_dtbs"
+  fi
+fi
+
+apply_tb321fu_legacy_cleanup "$rootfs_dir"
+
+if ci_bool "$APPLY_Y700_FIRMWARE_FIXES"; then
+  apply_y700_firmware_fixes "$rootfs_dir"
+fi
+if ci_bool "$APPLY_Y700_AUDIO_POLICY_FIXES"; then
+  apply_y700_audio_policy_fixes "$rootfs_dir"
+fi
+
+# ── Phase 4: Install Y700 .deb packages ────────────────────────────────
+
+install_deb_into_rootfs() {
+  local deb=$1
+  local root=$2
+  local tmp="$work_dir/deb-extract"
+
+  rm -rf "$tmp"
+  mkdir -p "$tmp"
+
+  ci_log "extracting $(basename "$deb")"
+  ar x --output="$tmp" "$deb"
+
+  # Find the data archive (could be data.tar.xz, data.tar.gz, data.tar.zst, etc)
+  local data_archive=""
+  for candidate in "$tmp"/data.tar.*; do
+    if [ -f "$candidate" ]; then
+      data_archive="$candidate"
+      break
+    fi
+  done
+  [ -n "$data_archive" ] || ci_die "no data archive found in $deb"
+
+  tar -C "$root" -xf "$data_archive"
+  rm -rf "$tmp"
+}
+
+install_deb_dir() {
+  local deb_dir=$1
+  local root=$2
+  local label=$3
+
+  [ -d "$deb_dir" ] || return 0
+  local count=0
+  while IFS= read -r -d '' deb; do
+    install_deb_into_rootfs "$deb" "$root"
+    count=$((count + 1))
+  done < <(find "$deb_dir" -maxdepth 1 -type f -name '*.deb' -print0)
+
+  ci_log "installed $count $label .deb packages"
+}
+
+if [ -n "$SENSOR_DEB_DIR" ]; then
+  install_deb_dir "$SENSOR_DEB_DIR" "$rootfs_dir" "sensor"
+fi
+if [ -n "$HAPTICS_DEB_DIR" ]; then
+  install_deb_dir "$HAPTICS_DEB_DIR" "$rootfs_dir" "haptics"
+fi
+if [ -n "$CAMERA_STACK_DEB_DIR" ]; then
+  install_deb_dir "$CAMERA_STACK_DEB_DIR" "$rootfs_dir" "camera"
+fi
+
+# ── Phase 5: Build GPU sensor plugin in chroot ─────────────────────────
+
 apply_tb321fu_gpu_sensor() {
   local root=$1
   local source_dir=${TB321FU_GPU_SENSOR_SOURCE_DIR:-"$SCRIPT_DIR/../../source/tb321fu-ksystemstats-adreno-freq"}
-  local rootfs_src=/tmp/tb321fu-ksystemstats-adreno-freq-src
-  local rootfs_build=/tmp/tb321fu-ksystemstats-adreno-freq-build
-  local plugin_rel=usr/lib/aarch64-linux-gnu/qt6/plugins/ksystemstats/ksystemstats_plugin_tb321fu_gpu.so
-  local stock_plugin_rel=usr/lib/aarch64-linux-gnu/qt6/plugins/ksystemstats/ksystemstats_plugin_gpu.so
-  local disabled_stock_plugin_rel=$stock_plugin_rel.disabled-tb321fu-adreno
 
   ci_log "building TB321FU KSystemStats Adreno GPU frequency plugin"
 
@@ -391,120 +385,122 @@ apply_tb321fu_gpu_sensor() {
   [ -f "$source_dir/tb321fu_gpu.cpp" ] || ci_die "missing TB321FU GPU sensor source: $source_dir/tb321fu_gpu.cpp"
   [ -f "$source_dir/metadata.json" ] || ci_die "missing TB321FU GPU sensor source: $source_dir/metadata.json"
 
+  # Detect Fedora lib64 paths for Qt6
+  local qt6_plugin_dir
+  if [ -d "$root/usr/lib64/qt6/plugins/ksystemstats" ]; then
+    qt6_plugin_dir="usr/lib64/qt6/plugins/ksystemstats"
+  elif [ -d "$root/usr/lib/aarch64-linux-gnu/qt6/plugins/ksystemstats" ]; then
+    qt6_plugin_dir="usr/lib/aarch64-linux-gnu/qt6/plugins/ksystemstats"
+  else
+    qt6_plugin_dir="usr/lib64/qt6/plugins/ksystemstats"
+  fi
+
+  local plugin_rel="$qt6_plugin_dir/ksystemstats_plugin_tb321fu_gpu.so"
+  local stock_plugin_rel="$qt6_plugin_dir/ksystemstats_plugin_gpu.so"
+  local disabled_stock_plugin_rel="$stock_plugin_rel.disabled-tb321fu-adreno"
+
+  local rootfs_src=/tmp/tb321fu-ksystemstats-adreno-freq-src
+  local rootfs_build=/tmp/tb321fu-ksystemstats-adreno-freq-build
+
   rm -rf "$root$rootfs_src" "$root$rootfs_build"
   install -d -m 0755 "$root$rootfs_src"
   rsync -a --delete "$source_dir"/ "$root$rootfs_src"/
 
-  cat > "$root/root/ci-build-tb321fu-gpu-sensor.sh" <<'GPU_SENSOR_BUILD'
+  cat > "$root/root/ci-build-tb321fu-gpu-sensor.sh" <<GPU_SENSOR_BUILD
 #!/usr/bin/env bash
 set -euo pipefail
 
-export DEBIAN_FRONTEND=noninteractive
-
-ci_bool_chroot()
-{
-  case "${1:-}" in
-    1|yes|true|on) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-if [ -n "${APT_HTTP_PROXY:-}" ] || [ -n "${APT_HTTPS_PROXY:-}" ]; then
-  mkdir -p /etc/apt/apt.conf.d
-  : > /etc/apt/apt.conf.d/99ci-proxy
-  if [ -n "${APT_HTTP_PROXY:-}" ]; then
-    printf 'Acquire::http::Proxy "%s";\n' "$APT_HTTP_PROXY" >> /etc/apt/apt.conf.d/99ci-proxy
-  fi
-  if [ -n "${APT_HTTPS_PROXY:-}" ]; then
-    printf 'Acquire::https::Proxy "%s";\n' "$APT_HTTPS_PROXY" >> /etc/apt/apt.conf.d/99ci-proxy
-  fi
-fi
-
 src=/tmp/tb321fu-ksystemstats-adreno-freq-src
 build=/tmp/tb321fu-ksystemstats-adreno-freq-build
-plugin=/usr/lib/aarch64-linux-gnu/qt6/plugins/ksystemstats/ksystemstats_plugin_tb321fu_gpu.so
-stock=/usr/lib/aarch64-linux-gnu/qt6/plugins/ksystemstats/ksystemstats_plugin_gpu.so
-disabled=/usr/lib/aarch64-linux-gnu/qt6/plugins/ksystemstats/ksystemstats_plugin_gpu.so.disabled-tb321fu-adreno
-build_deps="cmake extra-cmake-modules g++ make libksysguard-dev libkf6coreaddons-dev libsensors-dev"
+plugin_rel="$plugin_rel"
+stock_rel="$stock_plugin_rel"
+disabled_rel="$disabled_stock_plugin_rel"
 
-new_build_deps=""
-for pkg in $build_deps; do
-  if dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed'; then
-    :
-  else
-    new_build_deps="$new_build_deps $pkg"
-  fi
-done
+# Install build dependencies (Fedora/dnf)
+dnf install -y \
+  cmake extra-cmake-modules gcc-c++ make \
+  kf6-ksysguard-devel kf6-coreaddons-devel \
+  libsensors-devel qt6-qtbase-devel 2>/dev/null || \
+dnf install -y \
+  cmake extra-cmake-modules gcc-c++ make \
+  kf6-ksysguard-devel kf6-coreaddons-devel \
+  libsensors-devel qt6-base-devel
 
-apt-get update
-apt-get install -y --no-install-recommends $build_deps
+cmake -S "\$src" -B "\$build" \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DCMAKE_INSTALL_PREFIX=/usr
+cmake --build "\$build" -j${TB321FU_GPU_SENSOR_BUILD_JOBS}
+cmake --install "\$build"
 
-cmake -S "$src" -B "$build" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX=/usr
-cmake --build "$build" -j"${TB321FU_GPU_SENSOR_BUILD_JOBS:-2}"
-cmake --install "$build"
-
-test -f "$plugin"
-if [ -f "$stock" ]; then
-  rm -f "$disabled"
-  mv "$stock" "$disabled"
+test -f "/\$plugin_rel"
+if [ -f "/\$stock_rel" ]; then
+  rm -f "/\$disabled_rel"
+  mv "/\$stock_rel" "/\$disabled_rel"
 fi
-test ! -e "$stock"
+test ! -e "/\$stock_rel"
 
 install -d -m 0755 /usr/share/tb321fu-ksystemstats-gpu
-sha256sum "$plugin" > /usr/share/tb321fu-ksystemstats-gpu/ksystemstats_plugin_tb321fu_gpu.so.sha256
+sha256sum "/\$plugin_rel" > /usr/share/tb321fu-ksystemstats-gpu/ksystemstats_plugin_tb321fu_gpu.so.sha256
 
-rm -rf "$src" "$build"
+rm -rf "\$src" "\$build"
 
-if [ -n "$new_build_deps" ]; then
-  apt-get purge -y $new_build_deps
-  apt-get autoremove -y --purge
-fi
-apt-get clean
-rm -rf /var/lib/apt/lists/*
-rm -f /etc/apt/apt.conf.d/99ci-proxy
+# Clean up build deps
+dnf remove -y --noautoremove \
+  cmake extra-cmake-modules gcc-c++ make \
+  kf6-ksysguard-devel kf6-coreaddons-devel \
+  libsensors-devel qt6-qtbase-devel \
+  2>/dev/null || true
+dnf clean all
 
-test -f "$plugin"
-test ! -e "$stock"
-test ! -e "$src"
-test ! -e "$build"
+test -f "/\$plugin_rel"
+test ! -e "/\$stock_rel"
+test ! -e "/\$src"
+test ! -e "/\$build"
 GPU_SENSOR_BUILD
   chmod +x "$root/root/ci-build-tb321fu-gpu-sensor.sh"
 
-  local gpu_resolv_backup="$work_dir/gpu-sensor-resolv.conf.original"
-  local gpu_resolv_link="$work_dir/gpu-sensor-resolv.conf.link"
-  rm -f "$gpu_resolv_backup" "$gpu_resolv_link"
+  # Set up resolv.conf for network in chroot
+  local resolv_backup="$work_dir/gpu-sensor-resolv.original"
+  local resolv_link="$work_dir/gpu-sensor-resolv.link"
+  rm -f "$resolv_backup" "$resolv_link"
   if [ -L "$root/etc/resolv.conf" ]; then
-    readlink "$root/etc/resolv.conf" > "$gpu_resolv_link"
+    readlink "$root/etc/resolv.conf" > "$resolv_link"
   elif [ -e "$root/etc/resolv.conf" ]; then
-    cp -a "$root/etc/resolv.conf" "$gpu_resolv_backup"
+    cp -a "$root/etc/resolv.conf" "$resolv_backup"
   fi
   rm -f "$root/etc/resolv.conf"
-  if [ -n "$RESOLV_CONF_CONTENT" ]; then
-    printf '%s\n' "$RESOLV_CONF_CONTENT" > "$root/etc/resolv.conf"
-  elif [ -f /run/systemd/resolve/resolv.conf ]; then
+  if [ -f /run/systemd/resolve/resolv.conf ]; then
     cp /run/systemd/resolve/resolv.conf "$root/etc/resolv.conf"
   else
     cp /etc/resolv.conf "$root/etc/resolv.conf"
   fi
+  if ! awk '
+    /^[[:space:]]*nameserver[[:space:]]+/ {
+      ns=$2
+      if (ns !~ /^(127\.|::1$|0\.0\.0\.0$)/) good=1
+    }
+    END { exit good ? 0 : 1 }
+  ' "$root/etc/resolv.conf"; then
+    printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > "$root/etc/resolv.conf"
+  fi
 
-  chroot "$root" env -i \
-    PATH=/usr/sbin:/usr/bin:/sbin:/bin \
-    HOME=/root \
-    LANG=C.UTF-8 \
-    APT_HTTP_PROXY="$APT_HTTP_PROXY" \
-    APT_HTTPS_PROXY="$APT_HTTPS_PROXY" \
-    http_proxy="$APT_HTTP_PROXY" \
-    https_proxy="$APT_HTTPS_PROXY" \
-    HTTP_PROXY="$APT_HTTP_PROXY" \
-    HTTPS_PROXY="$APT_HTTPS_PROXY" \
-    TB321FU_GPU_SENSOR_BUILD_JOBS="${TB321FU_GPU_SENSOR_BUILD_JOBS:-2}" \
-    bash /root/ci-build-tb321fu-gpu-sensor.sh
+  mount --bind /dev "$root/dev"
+  mount --bind /dev/pts "$root/dev/pts"
+  mount -t proc proc "$root/proc"
+  mount -t sysfs sysfs "$root/sys"
+  mount -t tmpfs tmpfs "$root/run"
+
+  chroot "$root" /bin/bash /root/ci-build-tb321fu-gpu-sensor.sh
+
+  for p in dev/pts dev proc sys run; do
+    mountpoint -q "$root/$p" && umount -l "$root/$p"
+  done
 
   rm -f "$root/etc/resolv.conf"
-  if [ -f "$gpu_resolv_link" ]; then
-    ln -s "$(cat "$gpu_resolv_link")" "$root/etc/resolv.conf"
-  elif [ -f "$gpu_resolv_backup" ]; then
-    cp -a "$gpu_resolv_backup" "$root/etc/resolv.conf"
+  if [ -f "$resolv_link" ]; then
+    ln -s "$(cat "$resolv_link")" "$root/etc/resolv.conf"
+  elif [ -f "$resolv_backup" ]; then
+    cp -a "$resolv_backup" "$root/etc/resolv.conf"
   else
     ln -s ../run/systemd/resolve/stub-resolv.conf "$root/etc/resolv.conf"
   fi
@@ -515,548 +511,103 @@ GPU_SENSOR_BUILD
   [ -f "$root/$disabled_stock_plugin_rel" ] || ci_die "disabled stock KSystemStats GPU plugin missing: /$disabled_stock_plugin_rel"
 }
 
-cleanup() {
-  set +e
-  if [ "$mounted" = 1 ]; then
-    for p in dev/pts dev proc sys run; do
-      mountpoint -q "$rootfs_dir/$p" && umount -l "$rootfs_dir/$p"
-    done
-    mountpoint -q "$rootfs_dir" && umount "$rootfs_dir"
-  fi
-  rm -rf "$work_dir"
-}
-trap cleanup EXIT
-
-ci_log "creating ext4 image: $rootfs_img"
-rm -f "$rootfs_img"
-truncate -s "$ROOTFS_IMAGE_SIZE" "$rootfs_img"
-mkfs_args=(-F -L "$ROOTFS_LABEL")
-if [ -n "${ROOTFS_UUID:-}" ]; then
-  mkfs_args+=(-U "$ROOTFS_UUID")
-fi
-mkfs.ext4 "${mkfs_args[@]}" "$rootfs_img"
-
-mkdir -p "$rootfs_dir"
-mount -o loop "$rootfs_img" "$rootfs_dir"
-mounted=1
-
-ci_log "debootstrap $DISTRO/$ARCH from $MIRROR"
-debootstrap_args=(--arch="$ARCH")
-if [ -n "$DEBOOTSTRAP_VARIANT" ]; then
-  debootstrap_args+=(--variant="$DEBOOTSTRAP_VARIANT")
-fi
-debootstrap "${debootstrap_args[@]}" "$DISTRO" "$rootfs_dir" "$MIRROR"
-
-if [ -n "${APT_SOURCES_LIST:-}" ]; then
-  printf '%s\n' "$APT_SOURCES_LIST" > "$rootfs_dir/etc/apt/sources.list"
-else
-  cat > "$rootfs_dir/etc/apt/sources.list" <<APT
-deb $MIRROR $DISTRO main restricted universe multiverse
-deb $MIRROR $DISTRO-updates main restricted universe multiverse
-deb $MIRROR $DISTRO-backports main restricted universe multiverse
-deb $MIRROR $DISTRO-security main restricted universe multiverse
-APT
+if ci_bool "$BUILD_TB321FU_GPU_SENSOR"; then
+  apply_tb321fu_gpu_sensor "$rootfs_dir"
 fi
 
+# ── Phase 6: User/system config ────────────────────────────────────────
+
+ci_log "configuring hostname"
 printf '%s\n' "$HOSTNAME_NAME" > "$rootfs_dir/etc/hostname"
 touch "$rootfs_dir/etc/hosts"
 sed -i '/^127\.0\.1\.1\b/d' "$rootfs_dir/etc/hosts"
 printf '127.0.1.1 %s\n' "$HOSTNAME_NAME" >> "$rootfs_dir/etc/hosts"
-original_resolv="$work_dir/resolv.conf.original"
-original_resolv_link="$work_dir/resolv.conf.link"
-if [ -L "$rootfs_dir/etc/resolv.conf" ]; then
-  readlink "$rootfs_dir/etc/resolv.conf" > "$original_resolv_link"
-elif [ -e "$rootfs_dir/etc/resolv.conf" ]; then
-  cp -a "$rootfs_dir/etc/resolv.conf" "$original_resolv"
-fi
-rm -f "$rootfs_dir/etc/resolv.conf"
-if [ -n "$RESOLV_CONF_CONTENT" ]; then
-  printf '%s\n' "$RESOLV_CONF_CONTENT" > "$rootfs_dir/etc/resolv.conf"
-elif [ -f /run/systemd/resolve/resolv.conf ]; then
-  cp /run/systemd/resolve/resolv.conf "$rootfs_dir/etc/resolv.conf"
-else
-  cp /etc/resolv.conf "$rootfs_dir/etc/resolv.conf"
-fi
-if ! awk '
-  /^[[:space:]]*nameserver[[:space:]]+/ {
-    ns=$2
-    if (ns !~ /^(127\.|::1$|0\.0\.0\.0$)/) good=1
-  }
-  END { exit good ? 0 : 1 }
-' "$rootfs_dir/etc/resolv.conf"; then
-  printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > "$rootfs_dir/etc/resolv.conf"
-fi
 
+ci_log "creating default user: $DEFAULT_USER_NAME"
 mount --bind /dev "$rootfs_dir/dev"
 mount --bind /dev/pts "$rootfs_dir/dev/pts"
 mount -t proc proc "$rootfs_dir/proc"
 mount -t sysfs sysfs "$rootfs_dir/sys"
 mount -t tmpfs tmpfs "$rootfs_dir/run"
 
-cat > "$rootfs_dir/root/ci-provision.sh" <<'PROVISION'
-#!/usr/bin/env bash
-set -euo pipefail
-
-export DEBIAN_FRONTEND=noninteractive
-
-ci_bool_chroot()
-{
-  case "${1:-}" in
-    1|yes|true|on) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-if [ -n "${APT_HTTP_PROXY:-}" ] || [ -n "${APT_HTTPS_PROXY:-}" ]; then
-  mkdir -p /etc/apt/apt.conf.d
-  : > /etc/apt/apt.conf.d/99ci-proxy
-  if [ -n "${APT_HTTP_PROXY:-}" ]; then
-    printf 'Acquire::http::Proxy "%s";\n' "$APT_HTTP_PROXY" >> /etc/apt/apt.conf.d/99ci-proxy
+chroot "$rootfs_dir" /bin/bash -c "
+  if ! id -u '$DEFAULT_USER_NAME' >/dev/null 2>&1; then
+    useradd -m -s /bin/bash '$DEFAULT_USER_NAME'
   fi
-  if [ -n "${APT_HTTPS_PROXY:-}" ]; then
-    printf 'Acquire::https::Proxy "%s";\n' "$APT_HTTPS_PROXY" >> /etc/apt/apt.conf.d/99ci-proxy
-  fi
-fi
-
-apt-get update
-apt-get install -y $PACKAGE_LIST
-
-if ci_bool_chroot "$INSTALL_FIREFOX"; then
-  firefox_version=$(dpkg-query -W -f='${Version}' firefox 2>/dev/null || true)
-  [ -n "$firefox_version" ] || { echo 'firefox package was not installed' >&2; exit 1; }
-  case "$firefox_version" in
-    *snap*) echo "refusing snap transition Firefox package version: $firefox_version" >&2; exit 1 ;;
-  esac
-fi
-
-if ci_bool_chroot "$INSTALL_FCITX5_CHINESE"; then
-  for pkg in fcitx5 fcitx5-chinese-addons fcitx5-pinyin im-config fonts-noto-cjk; do
-    dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed' || {
-      echo "required Fcitx 5 Chinese input package missing: $pkg" >&2
-      exit 1
-    }
-  done
-
-  install -d -m 0755 \
-    /etc/environment.d \
-    /etc/skel/.config/environment.d \
-    /etc/skel/.config/autostart \
-    /etc/skel/.config/fcitx5 \
-    /etc/skel/.config/plasma-workspace/env
-
-  cat > /etc/environment.d/90-fcitx5.conf <<'FCITX5_ENV'
-GTK_IM_MODULE=fcitx
-QT_IM_MODULE=fcitx
-XMODIFIERS=@im=fcitx
-SDL_IM_MODULE=fcitx
-INPUT_METHOD=fcitx
-FCITX5_ENV
-  chmod 0644 /etc/environment.d/90-fcitx5.conf
-  cp -a /etc/environment.d/90-fcitx5.conf /etc/skel/.config/environment.d/90-fcitx5.conf
-
-  cat > /etc/skel/.config/plasma-workspace/env/fcitx5.sh <<'FCITX5_PLASMA_ENV'
-#!/bin/sh
-export GTK_IM_MODULE=fcitx
-export QT_IM_MODULE=fcitx
-export XMODIFIERS=@im=fcitx
-export SDL_IM_MODULE=fcitx
-export INPUT_METHOD=fcitx
-FCITX5_PLASMA_ENV
-  chmod 0755 /etc/skel/.config/plasma-workspace/env/fcitx5.sh
-
-  cat > /etc/skel/.config/autostart/org.fcitx.Fcitx5.desktop <<'FCITX5_AUTOSTART'
-[Desktop Entry]
-Name=Fcitx 5
-GenericName=Input Method
-Comment=Start Fcitx 5 input method
-Exec=fcitx5 -d --replace
-Icon=org.fcitx.Fcitx5
-Terminal=false
-Type=Application
-Categories=System;Utility;
-X-GNOME-Autostart-enabled=true
-X-KDE-autostart-after=panel
-FCITX5_AUTOSTART
-  chmod 0644 /etc/skel/.config/autostart/org.fcitx.Fcitx5.desktop
-
-  cat > /etc/skel/.config/fcitx5/profile <<'FCITX5_PROFILE'
-[Groups/0]
-# Group Name
-Name=Default
-# Layout
-Default Layout=us
-# Default Input Method
-DefaultIM=pinyin
-
-[Groups/0/Items/0]
-# Name
-Name=keyboard-us
-# Layout
-Layout=
-
-[Groups/0/Items/1]
-# Name
-Name=pinyin
-# Layout
-Layout=
-
-[GroupOrder]
-0=Default
-FCITX5_PROFILE
-  chmod 0644 /etc/skel/.config/fcitx5/profile
-fi
-
-install -d -m 0755 /etc/xdg /etc/skel/.config
-cat > /etc/skel/.config/plasmakeyboardrc <<'PLASMAKEYBOARDRC'
-[General]
-enabledLocales=en_US
-soundEnabled=true
-vibrationEnabled=true
-vibrationMs=20
-PLASMAKEYBOARDRC
-chmod 0644 /etc/skel/.config/plasmakeyboardrc
-
-cat > /etc/xdg/kwinrc <<'KWINRC'
-[Wayland]
-InputMethod=/usr/share/applications/org.kde.plasma.keyboard.desktop
-VirtualKeyboardEnabled=true
-KWINRC
-chmod 0644 /etc/xdg/kwinrc
-cp -a /etc/xdg/kwinrc /etc/skel/.config/kwinrc
-
-cat > /etc/skel/.config/kwinoutputconfig.json <<'KWINOUTPUTCONFIG'
-[
-    {
-        "data": [
-            {
-                "allowDdcCi": true,
-                "allowSdrSoftwareBrightness": false,
-                "autoBrightnessCurve": [
-                    0,
-                    200,
-                    2500,
-                    12000,
-                    40000,
-                    100000
-                ],
-                "autoRotation": "InTabletMode",
-                "automaticBrightness": true,
-                "brightness": 0.35,
-                "colorPowerTradeoff": "PreferEfficiency",
-                "colorProfileSource": "sRGB",
-                "connectorName": "DSI-1",
-                "detectedDdcCi": false,
-                "edrPolicy": "always",
-                "highDynamicRange": false,
-                "iccProfilePath": "",
-                "maxBitsPerColor": 0,
-                "mode": {
-                    "height": 2560,
-                    "refreshRate": 120000,
-                    "width": 1600
-                },
-                "overscan": 0,
-                "rgbRange": "Automatic",
-                "scale": 2.3,
-                "sdrBrightness": 200,
-                "sdrGamutWideness": 0,
-                "sharpness": 0,
-                "transform": "Rotated180",
-                "vrrPolicy": "Never",
-                "wideColorGamut": false
-            }
-        ],
-        "name": "outputs"
-    }
-]
-KWINOUTPUTCONFIG
-chmod 0644 /etc/skel/.config/kwinoutputconfig.json
-
-systemctl enable NetworkManager || true
-systemctl enable ssh || true
-
-if ! id -u "$DEFAULT_USER_NAME" >/dev/null 2>&1; then
-  useradd -m -s /bin/bash "$DEFAULT_USER_NAME"
-fi
-printf '%s:%s\n' "$DEFAULT_USER_NAME" "$DEFAULT_USER_PASSWORD" | chpasswd
-
-default_user_group=$(id -gn "$DEFAULT_USER_NAME")
-if [ -d "/home/$DEFAULT_USER_NAME" ]; then
-  install -d -m 0755 "/home/$DEFAULT_USER_NAME/.config"
-  for skel_config in kwinrc plasmakeyboardrc kwinoutputconfig.json; do
-    cp -a "/etc/skel/.config/$skel_config" "/home/$DEFAULT_USER_NAME/.config/$skel_config"
-    chown "$DEFAULT_USER_NAME:$default_user_group" "/home/$DEFAULT_USER_NAME/.config/$skel_config"
-  done
-fi
-
-if ci_bool_chroot "$INSTALL_FCITX5_CHINESE" && [ -d "/home/$DEFAULT_USER_NAME" ]; then
-  install -d -m 0755 \
-    "/home/$DEFAULT_USER_NAME/.config" \
-    "/home/$DEFAULT_USER_NAME/.config/environment.d" \
-    "/home/$DEFAULT_USER_NAME/.config/autostart" \
-    "/home/$DEFAULT_USER_NAME/.config/fcitx5" \
-    "/home/$DEFAULT_USER_NAME/.config/plasma-workspace" \
-    "/home/$DEFAULT_USER_NAME/.config/plasma-workspace/env"
-  cp -a /etc/skel/.config/environment.d/90-fcitx5.conf "/home/$DEFAULT_USER_NAME/.config/environment.d/90-fcitx5.conf"
-  cp -a /etc/skel/.config/autostart/org.fcitx.Fcitx5.desktop "/home/$DEFAULT_USER_NAME/.config/autostart/org.fcitx.Fcitx5.desktop"
-  cp -a /etc/skel/.config/fcitx5/profile "/home/$DEFAULT_USER_NAME/.config/fcitx5/profile"
-  cp -a /etc/skel/.config/plasma-workspace/env/fcitx5.sh "/home/$DEFAULT_USER_NAME/.config/plasma-workspace/env/fcitx5.sh"
-  chown -R "$DEFAULT_USER_NAME:$default_user_group" \
-    "/home/$DEFAULT_USER_NAME/.config/environment.d" \
-    "/home/$DEFAULT_USER_NAME/.config/autostart" \
-    "/home/$DEFAULT_USER_NAME/.config/fcitx5" \
-    "/home/$DEFAULT_USER_NAME/.config/plasma-workspace"
-fi
-
-case "$ROOT_PASSWORD_MODE" in
-  locked)
-    passwd -l root || true
-    ;;
-  set)
-    [ -n "$ROOT_PASSWORD" ] || { echo 'ROOT_PASSWORD_MODE=set requires ROOT_PASSWORD' >&2; exit 1; }
-    printf 'root:%s\n' "$ROOT_PASSWORD" | chpasswd
-    ;;
-  empty)
-    passwd -d root || true
-    ;;
-  *)
-    echo "unsupported ROOT_PASSWORD_MODE=$ROOT_PASSWORD_MODE" >&2
-    exit 1
-    ;;
-esac
-
-case "$USER_SUDO_MODE" in
-  password)
-    usermod -aG sudo "$DEFAULT_USER_NAME"
-    rm -f "/etc/sudoers.d/010_${DEFAULT_USER_NAME}-nopasswd"
-    ;;
-  nopasswd)
-    usermod -aG sudo "$DEFAULT_USER_NAME"
-    mkdir -p /etc/sudoers.d
-    printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$DEFAULT_USER_NAME" > "/etc/sudoers.d/010_${DEFAULT_USER_NAME}-nopasswd"
-    chmod 0440 "/etc/sudoers.d/010_${DEFAULT_USER_NAME}-nopasswd"
-    visudo -cf "/etc/sudoers.d/010_${DEFAULT_USER_NAME}-nopasswd"
-    ;;
-  none)
-    gpasswd -d "$DEFAULT_USER_NAME" sudo >/dev/null 2>&1 || true
-    rm -f "/etc/sudoers.d/010_${DEFAULT_USER_NAME}-nopasswd"
-    ;;
-  *)
-    echo "unsupported USER_SUDO_MODE=$USER_SUDO_MODE" >&2
-    exit 1
-    ;;
-esac
-
-if [ -n "$TZ_REGION" ] && [ -f "/usr/share/zoneinfo/$TZ_REGION" ]; then
-  ln -sf "/usr/share/zoneinfo/$TZ_REGION" /etc/localtime
-  dpkg-reconfigure -f noninteractive tzdata || true
-fi
-
-while IFS= read -r locale_line; do
-  [ -n "$locale_line" ] || continue
-  sed -i "s/^# *\($locale_line\)/\1/" /etc/locale.gen || true
-done <<LOCALES_EOF
-$LOCALES
-LOCALES_EOF
-locale-gen || true
-update-locale LANG="$LANG_NAME" || true
-
-if compgen -G "/var/tmp/ci-debs/*.deb" >/dev/null; then
-  dpkg -i --force-overwrite /var/tmp/ci-debs/*.deb || apt-get -f install -y
-fi
-
-for ci_overlay in /var/tmp/ci-debs/*.tar /var/tmp/ci-debs/*.tar.gz /var/tmp/ci-debs/*.tgz /var/tmp/ci-debs/*.tar.xz /var/tmp/ci-debs/*.tar.zst; do
-  [ -e "$ci_overlay" ] || continue
-  case "$ci_overlay" in
-    *.tar) tar -C / -xf "$ci_overlay" ;;
-    *.tar.gz|*.tgz) tar -C / -xzf "$ci_overlay" ;;
-    *.tar.xz) tar -C / -xJf "$ci_overlay" ;;
-    *.tar.zst) tar -C / --zstd -xf "$ci_overlay" ;;
-  esac
-done
-
-if ci_bool_chroot "$DISABLE_SNAPD"; then
-  apt-get purge -y snapd plasma-discover-backend-snap || true
-  apt-get autoremove -y --purge || true
-  rm -rf /snap /var/snap /var/lib/snapd /var/cache/snapd
-  if dpkg-query -W -f='${Status}' snapd 2>/dev/null | grep -q 'install ok installed'; then
-    echo 'snapd is still installed despite DISABLE_SNAPD=1' >&2
-    exit 1
-  fi
-fi
-
-if [ "$CLEAN_APT_CACHE" = 1 ]; then
-  apt-get clean
-  rm -rf /var/lib/apt/lists/*
-fi
-rm -f /etc/apt/apt.conf.d/99ci-proxy
-
-rm -f /etc/machine-id
-touch /etc/machine-id
-rm -f /root/.bash_history "/home/${DEFAULT_USER_NAME}/.bash_history"
-rm -rf /tmp/* /var/tmp/ci-debs /root/ci-provision.sh
-PROVISION
-chmod +x "$rootfs_dir/root/ci-provision.sh"
-
-if [ -n "${DEB_ARCHIVE:-}" ]; then
-  tmp_archive="$work_dir/debs.archive"
-  mkdir -p "$rootfs_dir/var/tmp/ci-debs"
-  ci_download "$DEB_ARCHIVE" "$tmp_archive"
-  ci_extract_archive "$tmp_archive" "$rootfs_dir/var/tmp/ci-debs"
-fi
-if [ -n "${DEB_DIR:-}" ]; then
-  mkdir -p "$rootfs_dir/var/tmp/ci-debs"
-  find "$DEB_DIR" -maxdepth 1 -type f -name '*.deb' -exec cp -a {} "$rootfs_dir/var/tmp/ci-debs/" \;
-fi
-if [ -n "${SENSOR_DEB_ARCHIVE:-}" ]; then
-  include_deb_archive sensor "$SENSOR_DEB_ARCHIVE"
-fi
-if [ -n "${SENSOR_DEB_DIR:-}" ]; then
-  mkdir -p "$rootfs_dir/var/tmp/ci-debs"
-  ci_log "including source-built sensor debs from: $SENSOR_DEB_DIR"
-  find "$SENSOR_DEB_DIR" -maxdepth 1 -type f -name '*.deb' -exec cp -a {} "$rootfs_dir/var/tmp/ci-debs/" \;
-fi
-if [ -n "${HAPTICS_DEB_ARCHIVE:-}" ]; then
-  include_deb_archive haptics "$HAPTICS_DEB_ARCHIVE"
-fi
-if [ -n "${HAPTICS_DEB_DIR:-}" ]; then
-  mkdir -p "$rootfs_dir/var/tmp/ci-debs"
-  ci_log "including source-built haptics debs from: $HAPTICS_DEB_DIR"
-  find "$HAPTICS_DEB_DIR" -maxdepth 1 -type f -name '*.deb' -exec cp -a {} "$rootfs_dir/var/tmp/ci-debs/" \;
-fi
-if [ -n "${CAMERA_STACK_DEB_DIR:-}" ]; then
-  mkdir -p "$rootfs_dir/var/tmp/ci-debs"
-  ci_log "including source-built camera stack debs from: $CAMERA_STACK_DEB_DIR"
-  find "$CAMERA_STACK_DEB_DIR" -maxdepth 1 -type f -name '*.deb' -exec cp -a {} "$rootfs_dir/var/tmp/ci-debs/" \;
-fi
-
-if ci_bool "$INSTALL_FIREFOX"; then
-  configure_mozilla_firefox_repo "$rootfs_dir"
-fi
-
-ci_log "provisioning rootfs"
-chroot "$rootfs_dir" env -i \
-  PATH=/usr/sbin:/usr/bin:/sbin:/bin \
-  HOME=/root \
-  LANG=C.UTF-8 \
-  PACKAGE_LIST="$PACKAGE_LIST" \
-  INSTALL_FCITX5_CHINESE="$INSTALL_FCITX5_CHINESE" \
-  DEFAULT_USER_NAME="$DEFAULT_USER_NAME" \
-  DEFAULT_USER_PASSWORD="$DEFAULT_USER_PASSWORD" \
-  ROOT_PASSWORD_MODE="$ROOT_PASSWORD_MODE" \
-  ROOT_PASSWORD="$ROOT_PASSWORD" \
-  USER_SUDO_MODE="$USER_SUDO_MODE" \
-  INSTALL_FIREFOX="$INSTALL_FIREFOX" \
-  DISABLE_SNAPD="$DISABLE_SNAPD" \
-  TZ_REGION="$TZ_REGION" \
-  LOCALES="$LOCALES" \
-  LANG_NAME="$LANG_NAME" \
-  APT_HTTP_PROXY="$APT_HTTP_PROXY" \
-  APT_HTTPS_PROXY="$APT_HTTPS_PROXY" \
-  http_proxy="$APT_HTTP_PROXY" \
-  https_proxy="$APT_HTTPS_PROXY" \
-  HTTP_PROXY="$APT_HTTP_PROXY" \
-  HTTPS_PROXY="$APT_HTTPS_PROXY" \
-  CLEAN_APT_CACHE="$CLEAN_APT_CACHE" \
-  bash /root/ci-provision.sh
-
-rm -f "$rootfs_dir/etc/resolv.conf"
-if [ -f "$original_resolv_link" ]; then
-  ln -s "$(cat "$original_resolv_link")" "$rootfs_dir/etc/resolv.conf"
-elif [ -f "$original_resolv" ]; then
-  cp -a "$original_resolv" "$rootfs_dir/etc/resolv.conf"
-else
-  ln -s ../run/systemd/resolve/stub-resolv.conf "$rootfs_dir/etc/resolv.conf"
-fi
-
-if [ -n "${OVERLAY_ARCHIVE:-}" ]; then
-  tmp_overlay="$work_dir/overlay.archive"
-  ci_log "applying overlay archive: $OVERLAY_ARCHIVE"
-  ci_download "$OVERLAY_ARCHIVE" "$tmp_overlay"
-  ci_extract_archive "$tmp_overlay" "$rootfs_dir"
-fi
-if [ -n "${OVERLAY_DIR:-}" ]; then
-  ci_log "applying overlay directory: $OVERLAY_DIR"
-  rsync -aH --numeric-ids "$OVERLAY_DIR"/ "$rootfs_dir"/
-fi
-
-apply_sddm_autologin "$rootfs_dir"
-apply_tb321fu_legacy_cleanup "$rootfs_dir"
-
-if ci_bool "$APPLY_Y700_FIRMWARE_FIXES"; then
-  apply_y700_firmware_fixes "$rootfs_dir"
-fi
-if ci_bool "$APPLY_Y700_AUDIO_POLICY_FIXES"; then
-  apply_y700_audio_policy_fixes "$rootfs_dir"
-fi
-if ci_bool "$BUILD_TB321FU_GPU_SENSOR"; then
-  apply_tb321fu_gpu_sensor "$rootfs_dir"
-fi
-
-if ci_bool "$INSTALL_GAMING_STACK"; then
-  ci_log "installing Armada gaming stack"
-  env ROOTFS_DIR="$rootfs_dir" \
-    INSTALL_GAMING_STACK=1 \
-    STEAM_CLIENT_URL="${STEAM_CLIENT_URL:-}" \
-    STEAM_RUNTIME_URL="${STEAM_RUNTIME_URL:-}" \
-    FEX_EMU_VERSION="${FEX_EMU_VERSION:-}" \
-    FEX_ROOTFS_URL="${FEX_ROOTFS_URL:-}" \
-    PROTON_URL="${PROTON_URL:-}" \
-    GAMESCOPE_URL="${GAMESCOPE_URL:-}" \
-    GAMESCOPE_SESSION_URL="${GAMESCOPE_SESSION_URL:-}" \
-    MANGOHUD_URL="${MANGOHUD_URL:-}" \
-    DECKY_LOADER_URL="${DECKY_LOADER_URL:-}" \
-    INPUTPLUMBER_URL="${INPUTPLUMBER_URL:-}" \
-    bash "$SCRIPT_DIR/install-gaming-stack.sh"
-fi
-
-cat > "$build_info" <<INFO
-generated=$(date -u -Iseconds)
-distro=$DISTRO
-arch=$ARCH
-debootstrap_variant=$DEBOOTSTRAP_VARIANT
-mirror=$MIRROR
-hostname=$HOSTNAME_NAME
-default_user=$DEFAULT_USER_NAME
-root_password_mode=$ROOT_PASSWORD_MODE
-user_sudo_mode=$USER_SUDO_MODE
-sddm_autologin=$SDDM_AUTOLOGIN
-sddm_autologin_session=$SDDM_AUTOLOGIN_SESSION
-rootfs_label=$ROOTFS_LABEL
-rootfs_uuid=${ROOTFS_UUID:-}
-rootfs_partlabel=$ROOTFS_PARTLABEL
-overlay_archive=${OVERLAY_ARCHIVE:-}
-overlay_dir=${OVERLAY_DIR:-}
-deb_archive=${DEB_ARCHIVE:-}
-deb_dir=${DEB_DIR:-}
-sensor_deb_archive=${SENSOR_DEB_ARCHIVE:-}
-sensor_deb_dir=${SENSOR_DEB_DIR:-}
-haptics_deb_archive=${HAPTICS_DEB_ARCHIVE:-}
-haptics_deb_dir=${HAPTICS_DEB_DIR:-}
-camera_stack_deb_dir=${CAMERA_STACK_DEB_DIR:-}
-build_tb321fu_gpu_sensor=$BUILD_TB321FU_GPU_SENSOR
-tb321fu_gpu_sensor_source_dir=${TB321FU_GPU_SENSOR_SOURCE_DIR:-repo-default}
-install_gaming_stack=$INSTALL_GAMING_STACK
-install_gnome_snapshot=$INSTALL_GNOME_SNAPSHOT
-install_firefox=$INSTALL_FIREFOX
-install_fcitx5_chinese=$INSTALL_FCITX5_CHINESE
-disable_snapd=$DISABLE_SNAPD
-apply_y700_firmware_fixes=$APPLY_Y700_FIRMWARE_FIXES
-apply_y700_audio_policy_fixes=$APPLY_Y700_AUDIO_POLICY_FIXES
-INFO
-
-rm -f \
-  "$rootfs_dir/BUILD-INFO.txt" \
-  "$rootfs_dir/SHA256SUMS" \
-  "$rootfs_dir/SHA256SUMS.txt" \
-  "$rootfs_dir/Y700-ROOTFS-OVERLAY-MANIFEST.tsv"
-
-ci_log "writing manifest"
-(cd "$rootfs_dir" && find . -xdev -printf '%y\t%u\t%g\t%m\t%s\t%p\n' | sort) > "$manifest"
+  printf '%s:%s\n' '$DEFAULT_USER_NAME' '$DEFAULT_USER_PASSWORD' | chpasswd
+  usermod -aG wheel,video,render,input,audio,seat,gamemode '$DEFAULT_USER_NAME' 2>/dev/null || \
+  usermod -aG wheel,video,render,input,audio '$DEFAULT_USER_NAME' 2>/dev/null || true
+" || true
 
 for p in dev/pts dev proc sys run; do
   mountpoint -q "$rootfs_dir/$p" && umount -l "$rootfs_dir/$p"
 done
+
+ci_log "setting default target to graphical"
+chroot "$rootfs_dir" systemctl set-default graphical.target 2>/dev/null || true
+
+ci_log "enabling verbose systemd logging"
+# Add debug shell on tty1 for error visibility
+debug_service="$rootfs_dir/etc/systemd/system/debug-shell.service"
+if [ ! -f "$debug_service" ]; then
+  cat > "$debug_service" <<'DEBUG_SERVICE'
+[Unit]
+Description=Debug Shell
+After=systemd-user-sessions.service
+After=getty@tty1.service
+
+[Service]
+Type=simple
+ExecStart=/bin/bash --login
+StandardInput=tty
+StandardOutput=tty
+TTYPath=/dev/tty1
+
+[Install]
+WantedBy=multi-user.target
+DEBUG_SERVICE
+  chmod 0644 "$debug_service"
+fi
+install -d -m 0755 "$rootfs_dir/etc/systemd/system/multi-user.target.wants"
+ln -sf /etc/systemd/system/debug-shell.service \
+  "$rootfs_dir/etc/systemd/system/multi-user.target.wants/debug-shell.service" 2>/dev/null || true
+
+# Set systemd log level to debug
+mkdir -p "$rootfs_dir/etc/systemd/system.conf.d"
+cat > "$rootfs_dir/etc/systemd/system.conf.d/10-debug-log.conf" <<'LOGCONF'
+[Manager]
+LogLevel=debug
+LogTarget=journal+console
+LOGCONF
+chmod 0644 "$rootfs_dir/etc/systemd/system.conf.d/10-debug-log.conf"
+
+ci_log "cleaning up"
+rm -f \
+  "$rootfs_dir/etc/machine-id.bak" \
+  "$rootfs_dir/var/log/wtmp" \
+  "$rootfs_dir/var/log/btmp" \
+  "$rootfs_dir/var/log/lastlog"
+touch "$rootfs_dir/etc/machine-id"
+
+# ── Phase 7: Output ────────────────────────────────────────────────────
+
+ci_log "writing build info"
+cat > "$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.BUILD-INFO.txt" <<INFO
+generated=$(date -u -Iseconds)
+armada_image=$ARMADA_IMAGE
+hostname=$HOSTNAME_NAME
+default_user=$DEFAULT_USER_NAME
+rootfs_label=$ROOTFS_LABEL
+rootfs_image_size=$ROOTFS_IMAGE_SIZE
+sensor_deb_dir=${SENSOR_DEB_DIR:-}
+haptics_deb_dir=${HAPTICS_DEB_DIR:-}
+camera_stack_deb_dir=${CAMERA_STACK_DEB_DIR:-}
+build_tb321fu_gpu_sensor=$BUILD_TB321FU_GPU_SENSOR
+apply_y700_firmware_fixes=$APPLY_Y700_FIRMWARE_FIXES
+apply_y700_audio_policy_fixes=$APPLY_Y700_AUDIO_POLICY_FIXES
+INFO
+
+ci_log "unmounting and checking image"
 umount "$rootfs_dir"
 mounted=0
 e2fsck -f -y "$rootfs_img"
@@ -1066,8 +617,10 @@ raw_sha_file="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.raw.sha256"
 (cd "$OUTPUT_DIR" && sha256sum "$(basename "$rootfs_img")" > "$(basename "$raw_sha_file")")
 
 checksum_file="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.SHA256SUMS"
+build_info="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.BUILD-INFO.txt"
 rm -f "$checksum_file"
-(cd "$OUTPUT_DIR" && sha256sum "$(basename "$build_info")" "$(basename "$manifest")" "$(basename "$raw_sha_file")" > "$(basename "$checksum_file")")
+(cd "$OUTPUT_DIR" && sha256sum "$(basename "$build_info")" "$(basename "$raw_sha_file")" > "$(basename "$checksum_file")")
+(cd "$OUTPUT_DIR" && sha256sum "$(basename "$raw_sha_file")" >> "$(basename "$checksum_file")")
 
 case "$COMPRESS" in
   none)
@@ -1101,4 +654,4 @@ if [ "$COMPRESS" != none ] && [ "$KEEP_RAW_IMAGE" != 1 ]; then
   rm -f "$rootfs_img"
 fi
 
-ci_log "rootfs build complete: $OUTPUT_DIR"
+ci_log "Armada rootfs build complete: $OUTPUT_DIR"

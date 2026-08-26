@@ -1,4 +1,4 @@
-name: Build RootFS And GRUB
+name: Build Armada OS for Y700
 
 on:
   workflow_dispatch:
@@ -10,36 +10,20 @@ on:
       output_prefix:
         description: "Output filename prefix used for rootfs, grub, and artifact names."
         required: true
-        default: y700-kubuntu2604-arm64
+        default: y700-armada-os
         type: string
-      ubuntu_mirror:
-        description: "Ubuntu mirror URL. ARM64 devices should use ports.ubuntu.com/ubuntu-ports."
+      armada_image:
+        description: "Armada OS container image to use as rootfs base."
         required: true
-        default: http://ports.ubuntu.com/ubuntu-ports
-        type: choice
-        options:
-          - http://ports.ubuntu.com/ubuntu-ports
-      debootstrap_variant:
-        description: "Debootstrap variant. 'default' passes no --variant flag, 'minbase' is minimal, 'buildd' includes build tools."
-        required: true
-        default: default
-        type: choice
-        options:
-          - default
-          - minbase
-          - buildd
+        default: ghcr.io/armada-os/armada:testing
+        type: string
       rootfs_image_size:
-        description: "Rootfs ext4 image size (e.g. 20G, 24G, 32768M). Too small may fail to install desktop."
+        description: "Rootfs ext4 image size (e.g. 20G, 24G, 32768M). Too small may fail."
         required: true
-        default: 20G
-        type: string
-      rootfs_label:
-        description: "Rootfs ext4 filesystem label. Does not affect partition detection."
-        required: true
-        default: Ubuntu
+        default: 24G
         type: string
       rootfs_partlabel:
-        description: "Rootfs GPT partition label. Y700 boot defaults to 'userdata', keep this unless you know what you're doing."
+        description: "Rootfs GPT partition label. Y700 boot defaults to 'userdata'."
         required: true
         default: userdata
         type: string
@@ -49,60 +33,27 @@ on:
         default: y700
         type: string
       default_user_name:
-        description: "Default non-root user to create. Also used for SDDM autologin if enabled."
+        description: "Default non-root user to create."
         required: true
-        default: y700
+        default: armada
         type: string
       default_user_password:
         description: "Default user password. Note: workflow inputs are NOT secret."
         required: true
-        default: "1234"
+        default: deck
         type: string
-      root_password_mode:
-        description: "Root password mode. 'locked' disables root login, 'set' uses ROOT_PASSWORD field, 'empty' sets no password."
-        required: true
-        default: locked
-        type: choice
-        options:
-          - locked
-          - set
-          - empty
-      root_password:
-        description: "Root password. Only used when ROOT_PASSWORD_MODE=set. Leave empty for locked/empty modes."
-        required: false
-        default: ""
-        type: string
-      user_sudo_mode:
-        description: "Default user sudo permissions. 'password' requires password, 'nopasswd' allows passwordless sudo, 'none' disables sudo."
-        required: true
-        default: password
-        type: choice
-        options:
-          - password
-          - nopasswd
-          - none
-      sddm_autologin:
-        description: "Enable SDDM autologin. When disabled, boots to login screen where you can switch users."
-        required: true
-        default: false
-        type: boolean
       boot_image_size:
-        description: "GRUB/FAT boot image size (e.g. 256M, 512M, 1G). 256M is sufficient with verified boot template."
+        description: "GRUB/FAT boot image size (e.g. 256M, 512M, 1G)."
         required: true
         default: 256M
         type: string
-      rootfs_config:
-        description: "Advanced rootfs overrides as KEY=value lines. Leave empty to use built-in defaults."
-        required: false
-        type: string
-        default: ""
       boot_config:
-        description: "Advanced GRUB/FAT boot overrides as KEY=value lines. Leave empty to use built-in defaults."
+        description: "Advanced GRUB/FAT boot overrides as KEY=value lines."
         required: false
         type: string
         default: ""
       source_config:
-        description: "Advanced source/boot component overrides as KEY=value lines. Leave empty to use built-in defaults."
+        description: "Advanced source/boot component overrides as KEY=value lines."
         required: false
         type: string
         default: ""
@@ -122,42 +73,26 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y \
-            debootstrap dosfstools mtools e2fsprogs rsync curl unzip tar xz-utils zstd p7zip-full \
+            podman dosfstools mtools e2fsprogs rsync curl unzip tar xz-utils zstd p7zip-full \
             gdisk qemu-utils sudo ca-certificates gnupg binutils \
             meson ninja-build pkg-config protobuf-c-compiler gcc-aarch64-linux-gnu \
             libglib2.0-dev:arm64 libqmi-glib-dev:arm64 libgudev-1.0-dev:arm64 libpolkit-gobject-1-dev:arm64 libprotobuf-c-dev:arm64
 
       - name: Apply workflow configuration
         env:
-          INPUT_UBUNTU_MIRROR: ${{ inputs.ubuntu_mirror }}
-          INPUT_DEBOOTSTRAP_VARIANT: ${{ inputs.debootstrap_variant }}
+          INPUT_ARMADA_IMAGE: ${{ inputs.armada_image }}
           INPUT_ROOTFS_IMAGE_SIZE: ${{ inputs.rootfs_image_size }}
-          INPUT_ROOTFS_LABEL: ${{ inputs.rootfs_label }}
           INPUT_ROOTFS_PARTLABEL: ${{ inputs.rootfs_partlabel }}
           INPUT_HOSTNAME_NAME: ${{ inputs.hostname_name }}
           INPUT_DEFAULT_USER_NAME: ${{ inputs.default_user_name }}
           INPUT_DEFAULT_USER_PASSWORD: ${{ inputs.default_user_password }}
-          INPUT_ROOT_PASSWORD_MODE: ${{ inputs.root_password_mode }}
-          INPUT_ROOT_PASSWORD: ${{ inputs.root_password }}
-          INPUT_USER_SUDO_MODE: ${{ inputs.user_sudo_mode }}
-          INPUT_SDDM_AUTOLOGIN: ${{ inputs.sddm_autologin }}
           INPUT_BOOT_IMAGE_SIZE: ${{ inputs.boot_image_size }}
-          INPUT_ROOTFS_CONFIG: ${{ inputs.rootfs_config }}
           INPUT_BOOT_CONFIG: ${{ inputs.boot_config }}
           INPUT_SOURCE_CONFIG: ${{ inputs.source_config }}
         run: |
           set -euo pipefail
           cat > "$RUNNER_TEMP/rootfs.env" <<'CONFIG_EOF'
-          DISTRO=resolute
-          ARCH=arm64
           ROOTFS_UUID=
-          SDDM_AUTOLOGIN_SESSION=plasma
-          TZ_REGION=Asia/Shanghai
-          LANG_NAME=zh_CN.UTF-8
-          PACKAGE_LIST=
-          DESKTOP_ENV=kubuntu-desktop
-          OVERLAY_ARCHIVE=
-          DEB_ARCHIVE=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/y700-device-debs-20260624-201420-compat1.tar.gz
           BUILD_Y700_SENSOR_DEBS=1
           SENSOR_DEB_ARCHIVE=https://github.com/GUF296/tb321fu-sensor-debs/releases/download/tb321fu-sensor-debs-20260627.1/tb321fu-sensor-debs_20260627.1_arm64.tar.gz
           SENSOR_SOURCE_ARCHIVE=
@@ -178,24 +113,8 @@ jobs:
           BUILD_TB321FU_GPU_SENSOR=1
           TB321FU_GPU_SENSOR_SOURCE_DIR=
           TB321FU_GPU_SENSOR_BUILD_JOBS=2
-          INSTALL_GAMING_STACK=1
-          STEAM_CLIENT_URL=
-          STEAM_RUNTIME_URL=
-          FEX_EMU_VERSION=FEX-2608
-          FEX_ROOTFS_URL=https://rootfs.fex-emu.gg/ArchLinux/2026-08-11/ArchLinux.sqsh
-          PROTON_URL=https://github.com/CachyOS/proton-cachyos/releases/download/cachyos-11.0-20260703-slr/proton-cachyos-11.0-20260703-slr-arm64.tar.xz
-          GAMESCOPE_URL=
-          GAMESCOPE_SESSION_URL=https://github.com/OpenGamingCollective/gamescope-session-steam/archive/refs/heads/main.tar.gz
-          MANGOHUD_URL=
-          DECKY_LOADER_URL=https://github.com/SteamDeckHomebrew/decky-loader/releases/download/v3.2.6/PluginLoader
-          INPUTPLUMBER_URL=https://github.com/ShadowBlip/InputPlumber/releases/download/v0.78.1/inputplumber_0.78.1-1_arm64.deb
-          INSTALL_GNOME_SNAPSHOT=1
-          INSTALL_FIREFOX=1
-          INSTALL_FCITX5_CHINESE=1
-          DISABLE_SNAPD=1
           APPLY_Y700_FIRMWARE_FIXES=1
           APPLY_Y700_AUDIO_POLICY_FIXES=1
-          CLEAN_APT_CACHE=1
           COMPRESS=7z
           CHUNK_SIZE=
           KEEP_RAW_IMAGE=0
@@ -230,30 +149,16 @@ jobs:
             [ -n "$config_input" ] || return 0
             printf '\n%s\n' "$config_input" >> "$config_file"
           }
-          append_optional_config "$RUNNER_TEMP/rootfs.env" "$INPUT_ROOTFS_CONFIG"
+          append_optional_config "$RUNNER_TEMP/rootfs.env" ""
           append_optional_config "$RUNNER_TEMP/boot.env" "$INPUT_BOOT_CONFIG"
           append_optional_config "$RUNNER_TEMP/source.env" "$INPUT_SOURCE_CONFIG"
           {
-            printf 'MIRROR=%s\n' "$INPUT_UBUNTU_MIRROR"
-            if [ "$INPUT_DEBOOTSTRAP_VARIANT" = default ]; then
-              printf 'DEBOOTSTRAP_VARIANT=\n'
-            else
-              printf 'DEBOOTSTRAP_VARIANT=%s\n' "$INPUT_DEBOOTSTRAP_VARIANT"
-            fi
+            printf 'ARMADA_IMAGE=%s\n' "$INPUT_ARMADA_IMAGE"
             printf 'ROOTFS_IMAGE_SIZE=%s\n' "$INPUT_ROOTFS_IMAGE_SIZE"
-            printf 'ROOTFS_LABEL=%s\n' "$INPUT_ROOTFS_LABEL"
             printf 'ROOTFS_PARTLABEL=%s\n' "$INPUT_ROOTFS_PARTLABEL"
             printf 'HOSTNAME_NAME=%s\n' "$INPUT_HOSTNAME_NAME"
             printf 'DEFAULT_USER_NAME=%s\n' "$INPUT_DEFAULT_USER_NAME"
             printf 'DEFAULT_USER_PASSWORD=%s\n' "$INPUT_DEFAULT_USER_PASSWORD"
-            printf 'ROOT_PASSWORD_MODE=%s\n' "$INPUT_ROOT_PASSWORD_MODE"
-            printf 'ROOT_PASSWORD=%s\n' "$INPUT_ROOT_PASSWORD"
-            printf 'USER_SUDO_MODE=%s\n' "$INPUT_USER_SUDO_MODE"
-            if [ "$INPUT_SDDM_AUTOLOGIN" = true ]; then
-              printf 'SDDM_AUTOLOGIN=1\n'
-            else
-              printf 'SDDM_AUTOLOGIN=0\n'
-            fi
           } >> "$RUNNER_TEMP/rootfs.env"
           {
             printf 'BOOT_IMAGE_SIZE=%s\n' "$INPUT_BOOT_IMAGE_SIZE"
@@ -400,11 +305,15 @@ jobs:
             bash scripts/ci/build-tb321fu-camera-stack-deb.sh
           echo 'TB321FU_CAMERA_STACK_DEB_DIR=out/tb321fu-camera-stack-debs' >> "$GITHUB_ENV"
 
-      - name: Build rootfs image
+      - name: Build Armada rootfs image
         run: |
           set -euo pipefail
-          sudo --preserve-env=OUTPUT_PREFIX,DISTRO,ARCH,MIRROR,DEBOOTSTRAP_VARIANT,RESOLV_CONF_CONTENT,APT_HTTP_PROXY,APT_HTTPS_PROXY,http_proxy,https_proxy,HTTP_PROXY,HTTPS_PROXY,APT_SOURCES_LIST,ROOTFS_IMAGE_SIZE,ROOTFS_UUID,ROOTFS_LABEL,ROOTFS_PARTLABEL,HOSTNAME_NAME,DEFAULT_USER_NAME,DEFAULT_USER_PASSWORD,ROOT_PASSWORD_MODE,ROOT_PASSWORD,USER_SUDO_MODE,SDDM_AUTOLOGIN,SDDM_AUTOLOGIN_SESSION,TZ_REGION,LOCALES,LANG_NAME,PACKAGE_LIST,DESKTOP_ENV,OVERLAY_ARCHIVE,DEB_ARCHIVE,DEB_DIR,SENSOR_DEB_ARCHIVE,SENSOR_DEB_DIR,HAPTICS_DEB_ARCHIVE,HAPTICS_DEB_DIR,CAMERA_STACK_DEB_DIR,BUILD_TB321FU_GPU_SENSOR,TB321FU_GPU_SENSOR_SOURCE_DIR,TB321FU_GPU_SENSOR_BUILD_JOBS,INSTALL_GAMING_STACK,STEAM_CLIENT_URL,STEAM_RUNTIME_URL,FEX_EMU_VERSION,FEX_ROOTFS_URL,PROTON_URL,GAMESCOPE_URL,GAMESCOPE_SESSION_URL,MANGOHUD_URL,DECKY_LOADER_URL,INPUTPLUMBER_URL,INSTALL_GNOME_SNAPSHOT,INSTALL_FIREFOX,INSTALL_FCITX5_CHINESE,FCITX5_CHINESE_PACKAGES,DISABLE_SNAPD,APPLY_Y700_FIRMWARE_FIXES,APPLY_Y700_AUDIO_POLICY_FIXES,CLEAN_APT_CACHE,COMPRESS,CHUNK_SIZE,KEEP_RAW_IMAGE \
-            env OUTPUT_DIR="$OUTPUT_DIR_ROOTFS" SENSOR_DEB_DIR="${Y700_SENSOR_DEB_DIR:-${SENSOR_DEB_DIR:-}}" HAPTICS_DEB_DIR="${TB321FU_HAPTICS_DEB_DIR:-${HAPTICS_DEB_DIR:-}}" CAMERA_STACK_DEB_DIR="${TB321FU_CAMERA_STACK_DEB_DIR:-}" bash scripts/ci/build-rootfs-image.sh
+          sudo --preserve-env=ARMADA_IMAGE,ROOTFS_IMAGE_SIZE,ROOTFS_UUID,ROOTFS_LABEL,ROOTFS_PARTLABEL,HOSTNAME_NAME,DEFAULT_USER_NAME,DEFAULT_USER_PASSWORD,SENSOR_DEB_DIR,HAPTICS_DEB_DIR,CAMERA_STACK_DEB_DIR,BUILD_TB321FU_GPU_SENSOR,TB321FU_GPU_SENSOR_SOURCE_DIR,TB321FU_GPU_SENSOR_BUILD_JOBS,APPLY_Y700_FIRMWARE_FIXES,APPLY_Y700_AUDIO_POLICY_FIXES,COMPRESS,CHUNK_SIZE,KEEP_RAW_IMAGE \
+            env OUTPUT_DIR="$OUTPUT_DIR_ROOTFS" \
+                SENSOR_DEB_DIR="${Y700_SENSOR_DEB_DIR:-${SENSOR_DEB_DIR:-}}" \
+                HAPTICS_DEB_DIR="${TB321FU_HAPTICS_DEB_DIR:-${HAPTICS_DEB_DIR:-}}" \
+                CAMERA_STACK_DEB_DIR="${TB321FU_CAMERA_STACK_DEB_DIR:-}" \
+            bash scripts/ci/build-rootfs-image.sh
           sudo chown -R "$USER:$USER" out
 
       - name: Build GRUB boot image
@@ -441,21 +350,15 @@ jobs:
           set -euo pipefail
           mkdir -p out/ci-release
           checksum_dirs=("$OUTPUT_DIR_ROOTFS" "$OUTPUT_DIR_GRUB")
-          if [ -d out/y700-sensor-debs ]; then
-            checksum_dirs+=(out/y700-sensor-debs)
-          fi
-          if [ -d out/tb321fu-haptics-debs ]; then
-            checksum_dirs+=(out/tb321fu-haptics-debs)
-          fi
-          if [ -d out/tb321fu-camera-stack-debs ]; then
-            checksum_dirs+=(out/tb321fu-camera-stack-debs)
-          fi
+          for d in out/y700-sensor-debs out/tb321fu-haptics-debs out/tb321fu-camera-stack-debs; do
+            [ -d "$d" ] && checksum_dirs+=("$d")
+          done
           find "${checksum_dirs[@]}" -maxdepth 1 -type f -print0 | sort -z | xargs -0 sha256sum > out/ci-release/SHA256SUMS.txt
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.output_prefix }}-rootfs-grub
+          name: ${{ inputs.output_prefix }}-armada-rootfs-grub
           path: |
             out/ci-rootfs/*
             out/ci-grub/*

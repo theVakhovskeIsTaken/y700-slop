@@ -1,6 +1,0 @@
-[Desktop Entry]
-Name=Armada Gaming
-Comment=Gaming Mode for Armada
-Exec=/usr/share/gamescope-session-plus/sessions.d/steam
-TryExec=/usr/bin/gamescope
-Type=Application

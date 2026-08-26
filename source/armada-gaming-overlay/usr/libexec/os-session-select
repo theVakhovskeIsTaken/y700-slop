@@ -1,8 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-case "${1:-gamescope}" in
-  desktop|plasma) exec sudo /usr/libexec/armada/session-control desktop ;;
-  gamescope)      exec sudo /usr/libexec/armada/session-control gamescope ;;
-  *)              exec /usr/bin/gamescope-session-plus steam ;;
-esac
