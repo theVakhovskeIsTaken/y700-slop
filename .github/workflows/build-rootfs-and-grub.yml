@@ -4,23 +4,23 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 要创建或更新的 Release 标签；留空只生成 Actions artifact，不上传 Release。
+        description: "Release tag to create/update. Leave empty to skip release upload."
         required: false
         type: string
       output_prefix:
-        description: 输出文件名前缀；会用于 rootfs、grub 和 artifact 名称。
+        description: "Output filename prefix used for rootfs, grub, and artifact names."
         required: true
         default: y700-kubuntu2604-arm64
         type: string
       ubuntu_mirror:
-        description: Ubuntu 软件源地址；arm64 设备应使用 ports.ubuntu.com/ubuntu-ports。
+        description: "Ubuntu mirror URL. ARM64 devices should use ports.ubuntu.com/ubuntu-ports."
         required: true
         default: http://ports.ubuntu.com/ubuntu-ports
         type: choice
         options:
           - http://ports.ubuntu.com/ubuntu-ports
       debootstrap_variant:
-        description: debootstrap 变体；default 表示不传 --variant，minbase 是更小基础系统，buildd 偏构建环境。
+        description: "Debootstrap variant. 'default' passes no --variant flag, 'minbase' is minimal, 'buildd' includes build tools."
         required: true
         default: default
         type: choice
@@ -29,37 +29,37 @@ on:
           - minbase
           - buildd
       rootfs_image_size:
-        description: rootfs ext4 镜像大小；可手填如 20G、24G、32768M，过小可能导致桌面环境安装失败。
+        description: "Rootfs ext4 image size (e.g. 20G, 24G, 32768M). Too small may fail to install desktop."
         required: true
         default: 20G
         type: string
       rootfs_label:
-        description: rootfs 文件系统卷标；只是 ext4 label，不决定刷入分区。
+        description: "Rootfs ext4 filesystem label. Does not affect partition detection."
         required: true
         default: Ubuntu
         type: string
       rootfs_partlabel:
-        description: rootfs GPT 分区标签；当前 Y700 启动和刷机默认应保持 userdata，但可手填其它标签。
+        description: "Rootfs GPT partition label. Y700 boot defaults to 'userdata', keep this unless you know what you're doing."
         required: true
         default: userdata
         type: string
       hostname_name:
-        description: 系统主机名；安装后会写入 /etc/hostname。
+        description: "System hostname written to /etc/hostname."
         required: true
         default: y700
         type: string
       default_user_name:
-        description: 默认创建的普通用户名；也会被可选 SDDM 自动登录使用。
+        description: "Default non-root user to create. Also used for SDDM autologin if enabled."
         required: true
         default: y700
         type: string
       default_user_password:
-        description: 默认用户密码；注意 GitHub workflow 输入本身不是保密字段。
+        description: "Default user password. Note: workflow inputs are NOT secret."
         required: true
         default: "1234"
         type: string
       root_password_mode:
-        description: root 密码模式；locked=锁定 root，set=使用下方 ROOT_PASSWORD，empty=清空 root 密码。
+        description: "Root password mode. 'locked' disables root login, 'set' uses ROOT_PASSWORD field, 'empty' sets no password."
         required: true
         default: locked
         type: choice
@@ -68,12 +68,12 @@ on:
           - set
           - empty
       root_password:
-        description: root 密码；只有 ROOT_PASSWORD_MODE=set 时使用，locked/empty 时留空即可。
+        description: "Root password. Only used when ROOT_PASSWORD_MODE=set. Leave empty for locked/empty modes."
         required: false
         default: ""
         type: string
       user_sudo_mode:
-        description: 默认用户 sudo 权限；password=需要密码，nopasswd=免密 sudo，none=不给 sudo。
+        description: "Default user sudo permissions. 'password' requires password, 'nopasswd' allows passwordless sudo, 'none' disables sudo."
         required: true
         default: password
         type: choice
@@ -82,27 +82,27 @@ on:
           - nopasswd
           - none
       sddm_autologin:
-        description: 是否启用 SDDM 自动登录；关闭时启动到登录界面，可切换用户。
+        description: "Enable SDDM autologin. When disabled, boots to login screen where you can switch users."
         required: true
         default: false
         type: boolean
       boot_image_size:
-        description: GRUB/FAT 启动镜像大小；可手填如 256M、512M、1G，使用现有 verified boot template 时默认 256M 足够。
+        description: "GRUB/FAT boot image size (e.g. 256M, 512M, 1G). 256M is sufficient with verified boot template."
         required: true
         default: 256M
         type: string
       rootfs_config:
-        description: 可选高级 rootfs 覆盖配置，按 KEY=value 每行填写；不填则使用内置默认配置，常用选项已单独列出并会覆盖同名 KEY。
+        description: "Advanced rootfs overrides as KEY=value lines. Leave empty to use built-in defaults."
         required: false
         type: string
         default: ""
       boot_config:
-        description: 可选高级 GRUB/FAT 启动镜像覆盖配置，按 KEY=value 每行填写；不填则使用内置默认配置，常用选项已单独列出并会覆盖同名 KEY。
+        description: "Advanced GRUB/FAT boot overrides as KEY=value lines. Leave empty to use built-in defaults."
         required: false
         type: string
         default: ""
       source_config:
-        description: 可选高级源码/启动组件覆盖配置，按 KEY=value 每行填写；通常无需修改，不填则使用内置默认配置。
+        description: "Advanced source/boot component overrides as KEY=value lines. Leave empty to use built-in defaults."
         required: false
         type: string
         default: ""
