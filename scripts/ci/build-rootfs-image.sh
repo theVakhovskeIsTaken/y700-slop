@@ -28,6 +28,7 @@ Environment inputs:
   SENSOR_DEB_DIR             directory containing sensor .deb files
   HAPTICS_DEB_DIR            directory containing haptics .deb files
   CAMERA_STACK_DEB_DIR       directory containing camera stack .deb files
+  DEVICE_DEB_ARCHIVE         Y700 device debs archive URL/path (firmware, GPU, etc.)
   BUILD_TB321FU_GPU_SENSOR   build/install TB321FU GPU sensor plugin, default: 1
   TB321FU_GPU_SENSOR_SOURCE_DIR
                               optional source directory for the plugin
@@ -66,6 +67,7 @@ DEFAULT_USER_PASSWORD=${DEFAULT_USER_PASSWORD:-deck}
 SENSOR_DEB_DIR=${SENSOR_DEB_DIR:-}
 HAPTICS_DEB_DIR=${HAPTICS_DEB_DIR:-}
 CAMERA_STACK_DEB_DIR=${CAMERA_STACK_DEB_DIR:-}
+DEVICE_DEB_ARCHIVE=${DEVICE_DEB_ARCHIVE:-}
 BUILD_TB321FU_GPU_SENSOR=${BUILD_TB321FU_GPU_SENSOR:-1}
 TB321FU_GPU_SENSOR_SOURCE_DIR=${TB321FU_GPU_SENSOR_SOURCE_DIR:-}
 TB321FU_GPU_SENSOR_BUILD_JOBS=${TB321FU_GPU_SENSOR_BUILD_JOBS:-2}
@@ -209,16 +211,10 @@ apply_y700_firmware_fixes() {
     lib/firmware/qcom/sm8650/Lenovo-Y700-TB321FU-tplg.bin
     lib/firmware/qcom/vpu/vpu33_p4.mbn
   )
-  local rel missing=0
+  local rel
   for rel in "${required[@]}"; do
-    if [ ! -e "$root/$rel" ] && [ ! -L "$root/$rel" ]; then
-      ci_log "WARNING: missing Y700 firmware (non-fatal): $rel"
-      missing=$((missing + 1))
-    fi
+    [ -e "$root/$rel" ] || [ -L "$root/$rel" ] || ci_die "missing Y700 required firmware: $rel"
   done
-  if [ "$missing" -gt 0 ]; then
-    ci_log "WARNING: $missing firmware files missing — GPU/audio may not work on first boot"
-  fi
 }
 
 apply_y700_audio_policy_fixes() {
@@ -316,6 +312,14 @@ if [ -f "$supported_dtbs" ]; then
 fi
 
 apply_tb321fu_legacy_cleanup "$rootfs_dir"
+
+# Extract Y700 device debs archive (firmware, GPU blobs, etc.)
+if [ -n "$DEVICE_DEB_ARCHIVE" ]; then
+  ci_log "extracting Y700 device debs: $DEVICE_DEB_ARCHIVE"
+  device_archive="$work_dir/device-debs.archive"
+  ci_download "$DEVICE_DEB_ARCHIVE" "$device_archive"
+  ci_extract_archive "$device_archive" "$rootfs_dir"
+fi
 
 if ci_bool "$APPLY_Y700_FIRMWARE_FIXES"; then
   apply_y700_firmware_fixes "$rootfs_dir"
