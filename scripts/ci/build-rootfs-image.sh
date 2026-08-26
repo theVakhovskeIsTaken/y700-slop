@@ -80,13 +80,9 @@ work_dir=$(mktemp -d "$OUTPUT_DIR/.armada-rootfs.XXXXXX")
 rootfs_dir="$work_dir/rootfs"
 rootfs_img="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.img"
 mounted=0
-container_id=""
 
 cleanup() {
   set +e
-  if [ -n "$container_id" ]; then
-    podman --storage-driver vfs rm "$container_id" >/dev/null 2>&1 || true
-  fi
   if [ "$mounted" = 1 ]; then
     for p in dev/pts dev proc sys run; do
       mountpoint -q "$rootfs_dir/$p" && umount -l "$rootfs_dir/$p"
@@ -99,17 +95,15 @@ trap cleanup EXIT
 
 # ── Phase 1: Extract Armada container image ─────────────────────────────
 
-ci_require_cmd podman
-
-# Reset podman state to avoid lock contention in CI environments
-ci_log "resetting podman state"
-podman system reset --force 2>/dev/null || true
-
-ci_log "pulling Armada container image: $ARMADA_IMAGE"
-podman pull --storage-driver vfs "$ARMADA_IMAGE"
-
-ci_log "creating container from image"
-container_id=$(podman --storage-driver vfs create "$ARMADA_IMAGE" /bin/true)
+# Use crane to export container filesystem — no daemon, no storage driver conflicts
+if ! command -v crane &>/dev/null; then
+  ci_log "installing crane"
+  crane_url="https://github.com/google/go-containerregistry/releases/download/v0.20.3/go-containerregistry_Linux_arm64.tar.gz"
+  curl -fL --retry 3 -o /tmp/crane.tar.gz "$crane_url"
+  tar -C /tmp -xzf /tmp/crane.tar.gz crane
+  sudo install -m 0755 /tmp/crane /usr/local/bin/crane
+  rm -f /tmp/crane /tmp/crane.tar.gz
+fi
 
 ci_log "creating ext4 image: $rootfs_img"
 rm -f "$rootfs_img"
@@ -124,9 +118,8 @@ mkdir -p "$rootfs_dir"
 mount -o loop "$rootfs_img" "$rootfs_dir"
 mounted=1
 
-ci_log "exporting container filesystem"
-mkdir -p "$work_dir/container-export"
-podman --storage-driver vfs export "$container_id" | tar -C "$rootfs_dir" -xf -
+ci_log "exporting container filesystem: $ARMADA_IMAGE"
+crane export "$ARMADA_IMAGE" - | tar -C "$rootfs_dir" -xf -
 
 # ── Phase 2: Strip bootc/ostree internals ──────────────────────────────
 

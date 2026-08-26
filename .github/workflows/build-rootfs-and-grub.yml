@@ -73,7 +73,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y \
-            podman dosfstools mtools e2fsprogs rsync curl unzip tar xz-utils zstd p7zip-full \
+            dosfstools mtools e2fsprogs rsync curl unzip tar xz-utils zstd p7zip-full \
             gdisk qemu-utils sudo ca-certificates gnupg binutils \
             meson ninja-build pkg-config protobuf-c-compiler gcc-aarch64-linux-gnu \
             libglib2.0-dev:arm64 libqmi-glib-dev:arm64 libgudev-1.0-dev:arm64 libpolkit-gobject-1-dev:arm64 libprotobuf-c-dev:arm64
