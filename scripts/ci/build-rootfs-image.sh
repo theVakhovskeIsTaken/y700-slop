@@ -209,10 +209,16 @@ apply_y700_firmware_fixes() {
     lib/firmware/qcom/sm8650/Lenovo-Y700-TB321FU-tplg.bin
     lib/firmware/qcom/vpu/vpu33_p4.mbn
   )
-  local rel
+  local rel missing=0
   for rel in "${required[@]}"; do
-    [ -e "$root/$rel" ] || [ -L "$root/$rel" ] || ci_die "missing Y700 required firmware: $rel"
+    if [ ! -e "$root/$rel" ] && [ ! -L "$root/$rel" ]; then
+      ci_log "WARNING: missing Y700 firmware (non-fatal): $rel"
+      missing=$((missing + 1))
+    fi
   done
+  if [ "$missing" -gt 0 ]; then
+    ci_log "WARNING: $missing firmware files missing — GPU/audio may not work on first boot"
+  fi
 }
 
 apply_y700_audio_policy_fixes() {
