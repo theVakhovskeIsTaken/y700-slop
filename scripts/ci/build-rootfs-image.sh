@@ -368,8 +368,7 @@ if [ -n "$DEVICE_DEB_ARCHIVE" ]; then
   ci_log "installed $deb_count device .deb packages"
 
   # Also extract any raw tar overlays (non-deb archives inside)
-  for overlay in "$device_extract"/*.tar "$device_extract"/*.tar.gz "$device_extract"/*.tgz "$device_extract"/*.tar.xz "$device_extract"/*.tar.zst; do
-    [ -e "$overlay" ] || continue
+  while IFS= read -r -d '' overlay; do
     ci_log "extracting overlay: $(basename "$overlay")"
     case "$overlay" in
       *.tar) tar -C "$rootfs_dir" -xf "$overlay" ;;
@@ -377,7 +376,7 @@ if [ -n "$DEVICE_DEB_ARCHIVE" ]; then
       *.tar.xz) tar -C "$rootfs_dir" -xJf "$overlay" ;;
       *.tar.zst) tar -C "$rootfs_dir" --zstd -xf "$overlay" ;;
     esac
-  done
+  done < <(find "$device_extract" -maxdepth 1 -type f \( -name '*.tar' -o -name '*.tar.gz' -o -name '*.tgz' -o -name '*.tar.xz' -o -name '*.tar.zst' \) -print0)
 fi
 
 if ci_bool "$APPLY_Y700_FIRMWARE_FIXES"; then
@@ -445,12 +444,8 @@ disabled_rel="$disabled_stock_plugin_rel"
 # Install build dependencies (Fedora/dnf)
 dnf install -y \
   cmake extra-cmake-modules gcc-c++ make \
-  kf6-ksysguard-devel kf6-coreaddons-devel \
-  libsensors-devel qt6-qtbase-devel 2>/dev/null || \
-dnf install -y \
-  cmake extra-cmake-modules gcc-c++ make \
-  kf6-ksysguard-devel kf6-coreaddons-devel \
-  libsensors-devel qt6-base-devel
+  libksysguard-devel kf6-kcoreaddons-devel kf6-ki18n-devel \
+  lm_sensors-devel qt6-qtbase-devel
 
 cmake -S "\$src" -B "\$build" \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
