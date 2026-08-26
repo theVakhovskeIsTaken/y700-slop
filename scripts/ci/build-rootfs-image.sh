@@ -85,7 +85,7 @@ container_id=""
 cleanup() {
   set +e
   if [ -n "$container_id" ]; then
-    podman rm "$container_id" >/dev/null 2>&1 || true
+    podman --storage-driver vfs rm "$container_id" >/dev/null 2>&1 || true
   fi
   if [ "$mounted" = 1 ]; then
     for p in dev/pts dev proc sys run; do
@@ -101,11 +101,15 @@ trap cleanup EXIT
 
 ci_require_cmd podman
 
+# Reset podman state to avoid lock contention in CI environments
+ci_log "resetting podman state"
+podman system reset --force 2>/dev/null || true
+
 ci_log "pulling Armada container image: $ARMADA_IMAGE"
-podman pull "$ARMADA_IMAGE"
+podman pull --storage-driver vfs "$ARMADA_IMAGE"
 
 ci_log "creating container from image"
-container_id=$(podman create "$ARMADA_IMAGE" /bin/true)
+container_id=$(podman --storage-driver vfs create "$ARMADA_IMAGE" /bin/true)
 
 ci_log "creating ext4 image: $rootfs_img"
 rm -f "$rootfs_img"
@@ -122,7 +126,7 @@ mounted=1
 
 ci_log "exporting container filesystem"
 mkdir -p "$work_dir/container-export"
-podman export "$container_id" | tar -C "$rootfs_dir" -xf -
+podman --storage-driver vfs export "$container_id" | tar -C "$rootfs_dir" -xf -
 
 # ── Phase 2: Strip bootc/ostree internals ──────────────────────────────
 
