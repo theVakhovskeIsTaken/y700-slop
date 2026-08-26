@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DEVICE_MODEL=$(tr -d '\0' < /sys/firmware/devicetree/base/model 2>/dev/null || echo "")
+DEVICE_COMPATIBLE=$(tr -d '\0' < /sys/firmware/devicetree/base/compatible 2>/dev/null || echo "")
+
+resolve_device_profile() {
+  case "$DEVICE_MODEL" in
+    *Lenovo*Legion*Y700*|*TB321FU*)
+      echo "y700"
+      ;;
+    *)
+      echo ""
+      ;;
+  esac
+}
+
+profile=$(resolve_device_profile)
+
+if [ -z "$profile" ]; then
+  echo "unknown device: $DEVICE_MODEL" >&2
+  exit 1
+fi
+
+device_conf="/usr/lib/armada/devices/${profile}.conf"
+defaults_conf="/usr/lib/armada/devices/defaults.conf"
+
+if [ ! -f "$device_conf" ]; then
+  echo "missing device config: $device_conf" >&2
+  exit 1
+fi
+
+if [ -f "$defaults_conf" ]; then
+  # shellcheck disable=SC1090
+  . "$defaults_conf"
+fi
+
+# shellcheck disable=SC1090
+. "$device_conf"
+
+case "${ARMADA_SOC_CLASS:-SM8650}" in
+  SM8250)
+    ARMADA_LITTLE_CORES=${ARMADA_LITTLE_CORES:-"0-3"}
+    ARMADA_BIG_CORES=${ARMADA_BIG_CORES:-"4-7"}
+    ARMADA_PRIME_CORES=${ARMADA_PRIME_CORES:-"7"}
+    ARMADA_IRQ_CORES=${ARMADA_IRQ_CORES:-""}
+    ;;
+  SM8550)
+    ARMADA_LITTLE_CORES=${ARMADA_LITTLE_CORES:-"0-2"}
+    ARMADA_BIG_CORES=${ARMADA_BIG_CORES:-"3-7"}
+    ARMADA_PRIME_CORES=${ARMADA_PRIME_CORES:-"7"}
+    ARMADA_IRQ_CORES=${ARMADA_IRQ_CORES:-"0-2"}
+    ;;
+  SM8650)
+    ARMADA_LITTLE_CORES=${ARMADA_LITTLE_CORES:-"0-1"}
+    ARMADA_BIG_CORES=${ARMADA_BIG_CORES:-"2-7"}
+    ARMADA_PRIME_CORES=${ARMADA_PRIME_CORES:-"7"}
+    ARMADA_IRQ_CORES=${ARMADA_IRQ_CORES:-"0-1"}
+    ;;
+  SM8750)
+    ARMADA_LITTLE_CORES=${ARMADA_LITTLE_CORES:-""}
+    ARMADA_BIG_CORES=${ARMADA_BIG_CORES:-"0-7"}
+    ARMADA_PRIME_CORES=${ARMADA_PRIME_CORES:-"6-7"}
+    ARMADA_IRQ_CORES=${ARMADA_IRQ_CORES:-""}
+    ;;
+esac
+
+export ARMADA_DEVICE_ID
+export ARMADA_DEVICE_NAME
+export ARMADA_SOC_CLASS
+export ARMADA_PANEL_ORIENTATION
+export ARMADA_PRIMARY_CONNECTOR
+export ARMADA_PRIMARY_BACKLIGHT
+export ARMADA_PRIMARY_TOUCHSCREEN
+export ARMADA_SECONDARY_CONNECTOR
+export ARMADA_VIRTUAL_KEYBOARD_CONNECTOR
+export ARMADA_SECONDARY_TOUCHSCREEN
+export ARMADA_PANEL_TYPE
+export ARMADA_GAMEPAD_QUIRK
+export ARMADA_SUSPEND_MODE
+export ARMADA_SYNC_SUSPEND
+export ARMADA_HDR_NITS
+export ARMADA_RGB_BACKEND
+export ARMADA_RGB_TARGETS
+export ARMADA_RGB_CORRECTION
+export ARMADA_GAMESCOPE_FAKE_OUTPUT_MM
+export ARMADA_GAMESCOPE_FORCE_COMPOSITION_ROTATION
+export ARMADA_LITTLE_CORES
+export ARMADA_BIG_CORES
+export ARMADA_PRIME_CORES
+export ARMADA_IRQ_CORES

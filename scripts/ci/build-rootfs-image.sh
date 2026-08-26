@@ -56,6 +56,17 @@ Environment inputs:
   INSTALL_FIREFOX            install Firefox browser, default: 1
   INSTALL_FCITX5_CHINESE     install and configure Fcitx 5 Chinese input, default: 1
   FCITX5_CHINESE_PACKAGES    optional package list for Fcitx 5 Chinese input
+  INSTALL_GAMING_STACK       install Armada gaming stack (Steam/FEX/Proton/Gamescope), default: 0
+  STEAM_CLIENT_URL           optional URL to prebuilt Steam ARM64 client
+  STEAM_RUNTIME_URL          optional URL to SteamRT ARM64 runtime
+  FEX_EMU_VERSION            optional FEX version to install
+  FEX_ROOTFS_URL             FEX Arch Linux rootfs URL
+  PROTON_URL                 CachyOS Proton ARM64 URL
+  GAMESCOPE_URL              optional URL to prebuilt Gamescope
+  GAMESCOPE_SESSION_URL      Gamescope session Steam URL
+  MANGOHUD_URL               optional URL to prebuilt MangoHud
+  DECKY_LOADER_URL           optional URL to Decky Loader
+  INPUTPLUMBER_URL           optional URL to InputPlumber
   DISABLE_SNAPD              purge snapd and snap integration from rootfs, default: 1
   APPLY_Y700_FIRMWARE_FIXES  copy/verify required Y700 firmware paths only, default: 1
   APPLY_Y700_AUDIO_POLICY_FIXES
@@ -109,6 +120,7 @@ APPLY_Y700_FIRMWARE_FIXES=${APPLY_Y700_FIRMWARE_FIXES:-1}
 APPLY_Y700_AUDIO_POLICY_FIXES=${APPLY_Y700_AUDIO_POLICY_FIXES:-1}
 BUILD_TB321FU_GPU_SENSOR=${BUILD_TB321FU_GPU_SENSOR:-1}
 TB321FU_GPU_SENSOR_SOURCE_DIR=${TB321FU_GPU_SENSOR_SOURCE_DIR:-}
+INSTALL_GAMING_STACK=${INSTALL_GAMING_STACK:-0}
 INSTALL_GNOME_SNAPSHOT=${INSTALL_GNOME_SNAPSHOT:-1}
 INSTALL_FIREFOX=${INSTALL_FIREFOX:-1}
 INSTALL_FCITX5_CHINESE=${INSTALL_FCITX5_CHINESE:-1}
@@ -981,6 +993,23 @@ if ci_bool "$BUILD_TB321FU_GPU_SENSOR"; then
   apply_tb321fu_gpu_sensor "$rootfs_dir"
 fi
 
+if ci_bool "$INSTALL_GAMING_STACK"; then
+  ci_log "installing Armada gaming stack"
+  env ROOTFS_DIR="$rootfs_dir" \
+    INSTALL_GAMING_STACK=1 \
+    STEAM_CLIENT_URL="${STEAM_CLIENT_URL:-}" \
+    STEAM_RUNTIME_URL="${STEAM_RUNTIME_URL:-}" \
+    FEX_EMU_VERSION="${FEX_EMU_VERSION:-}" \
+    FEX_ROOTFS_URL="${FEX_ROOTFS_URL:-}" \
+    PROTON_URL="${PROTON_URL:-}" \
+    GAMESCOPE_URL="${GAMESCOPE_URL:-}" \
+    GAMESCOPE_SESSION_URL="${GAMESCOPE_SESSION_URL:-}" \
+    MANGOHUD_URL="${MANGOHUD_URL:-}" \
+    DECKY_LOADER_URL="${DECKY_LOADER_URL:-}" \
+    INPUTPLUMBER_URL="${INPUTPLUMBER_URL:-}" \
+    bash "$SCRIPT_DIR/install-gaming-stack.sh"
+fi
+
 cat > "$build_info" <<INFO
 generated=$(date -u -Iseconds)
 distro=$DISTRO
@@ -1007,6 +1036,7 @@ haptics_deb_dir=${HAPTICS_DEB_DIR:-}
 camera_stack_deb_dir=${CAMERA_STACK_DEB_DIR:-}
 build_tb321fu_gpu_sensor=$BUILD_TB321FU_GPU_SENSOR
 tb321fu_gpu_sensor_source_dir=${TB321FU_GPU_SENSOR_SOURCE_DIR:-repo-default}
+install_gaming_stack=$INSTALL_GAMING_STACK
 install_gnome_snapshot=$INSTALL_GNOME_SNAPSHOT
 install_firefox=$INSTALL_FIREFOX
 install_fcitx5_chinese=$INSTALL_FCITX5_CHINESE

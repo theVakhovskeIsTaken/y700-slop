@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export DESKTOP_SESSION=plasma
+export XDG_CURRENT_DESKTOP=KDE
+export XDG_SESSION_DESKTOP=KDE
+export XDG_SESSION_TYPE=wayland
+
+if [ -f /usr/libexec/armada/device-env ]; then
+  eval "$(/usr/libexec/armada/device-env)"
+fi
+
+exec /usr/bin/startplasma-wayland

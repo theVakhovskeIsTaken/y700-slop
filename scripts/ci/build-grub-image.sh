@@ -194,12 +194,12 @@ if [ -n "$BOOT_TEMPLATE_IMAGE" ]; then
     mcopy -o -i "$boot_img" "$QCOMRAMP_EFI" ::/EFI/BOOT/$Y700_DIRECT_BOOT_EFI_NAME
   fi
   mkdir -p "$payload_dir/boot/grub/arm64-efi"
-  cat > "$payload_dir/boot/grub/arm64-efi/grub.cfg" <<EOF
+    cat > "$payload_dir/boot/grub/arm64-efi/grub.cfg" <<EOF
 set timeout=$GRUB_TIMEOUT
 set default=0
 set gfxpayload=keep
 set rootargs="video=efifb:off panic=10 efi=novamap $generated_rootargs init=/sbin/init console=tty1 console=ttyMSM0,115200n8 log_buf_len=64M consoleblank=0"
-set stableargs="$STABLEARGS msm.fbdev=0 drm_kms_helper.fbdev_emulation=0"
+set stableargs="$STABLEARGS"
 
 menuentry "Y700 daily" {
     devicetree /dtb/$DTB_NAME
@@ -213,7 +213,7 @@ menuentry "Y700 verbose" {
 
 menuentry "Y700 no-DRM SSH rescue" {
     devicetree /dtb/$DTB_NAME
-    linux /Image video=efifb:off panic=10 efi=novamap $generated_rootargs init=/sbin/init console=tty1 console=ttyMSM0,115200n8 log_buf_len=64M consoleblank=0 $STABLEARGS msm.fbdev=0 drm_kms_helper.fbdev_emulation=0 -- ignore_loglevel loglevel=8 printk.time=1 systemd.show_status=1
+    linux /Image video=efifb:off panic=10 efi=novamap $generated_rootargs init=/sbin/init console=tty1 console=ttyMSM0,115200n8 log_buf_len=64M consoleblank=0 $STABLEARGS -- ignore_loglevel loglevel=8 printk.time=1 systemd.show_status=1
 }
 EOF
   (cd "$payload_dir" && find . -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum) > "$payload_dir/SHA256SUMS.txt"
