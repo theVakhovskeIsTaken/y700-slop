@@ -313,6 +313,44 @@ fi
 
 apply_tb321fu_legacy_cleanup "$rootfs_dir"
 
+install_deb_into_rootfs() {
+  local deb=$1
+  local root=$2
+  local tmp="$work_dir/deb-extract"
+
+  rm -rf "$tmp"
+  mkdir -p "$tmp"
+
+  ci_log "extracting $(basename "$deb")"
+  ar x --output="$tmp" "$deb"
+
+  local data_archive=""
+  for candidate in "$tmp"/data.tar.*; do
+    if [ -f "$candidate" ]; then
+      data_archive="$candidate"
+      break
+    fi
+  done
+  [ -n "$data_archive" ] || ci_die "no data archive found in $deb"
+
+  tar -C "$root" -xf "$data_archive"
+  rm -rf "$tmp"
+}
+
+install_deb_dir() {
+  local deb_dir=$1
+  local root=$2
+  local label=$3
+
+  [ -d "$deb_dir" ] || return 0
+  local count=0
+  while IFS= read -r -d '' deb; do
+    install_deb_into_rootfs "$deb" "$root"
+    count=$((count + 1))
+  done < <(find "$deb_dir" -maxdepth 1 -type f -name '*.deb' -print0)
+  ci_log "installed $count $label .deb packages"
+}
+
 # Extract Y700 device debs archive (firmware, GPU blobs, etc.)
 if [ -n "$DEVICE_DEB_ARCHIVE" ]; then
   ci_log "extracting Y700 device debs: $DEVICE_DEB_ARCHIVE"
@@ -350,46 +388,6 @@ if ci_bool "$APPLY_Y700_AUDIO_POLICY_FIXES"; then
 fi
 
 # ── Phase 4: Install Y700 .deb packages ────────────────────────────────
-
-install_deb_into_rootfs() {
-  local deb=$1
-  local root=$2
-  local tmp="$work_dir/deb-extract"
-
-  rm -rf "$tmp"
-  mkdir -p "$tmp"
-
-  ci_log "extracting $(basename "$deb")"
-  ar x --output="$tmp" "$deb"
-
-  # Find the data archive (could be data.tar.xz, data.tar.gz, data.tar.zst, etc)
-  local data_archive=""
-  for candidate in "$tmp"/data.tar.*; do
-    if [ -f "$candidate" ]; then
-      data_archive="$candidate"
-      break
-    fi
-  done
-  [ -n "$data_archive" ] || ci_die "no data archive found in $deb"
-
-  tar -C "$root" -xf "$data_archive"
-  rm -rf "$tmp"
-}
-
-install_deb_dir() {
-  local deb_dir=$1
-  local root=$2
-  local label=$3
-
-  [ -d "$deb_dir" ] || return 0
-  local count=0
-  while IFS= read -r -d '' deb; do
-    install_deb_into_rootfs "$deb" "$root"
-    count=$((count + 1))
-  done < <(find "$deb_dir" -maxdepth 1 -type f -name '*.deb' -print0)
-
-  ci_log "installed $count $label .deb packages"
-}
 
 if [ -n "$SENSOR_DEB_DIR" ]; then
   install_deb_dir "$SENSOR_DEB_DIR" "$rootfs_dir" "sensor"
