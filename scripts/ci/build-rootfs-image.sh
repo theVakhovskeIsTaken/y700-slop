@@ -53,7 +53,6 @@ ci_require_cmd mount
 ci_require_cmd umount
 ci_require_cmd e2fsck
 ci_require_cmd rsync
-ci_require_cmd sha256sum
 
 OUTPUT_DIR=${OUTPUT_DIR:-out/ci-rootfs}
 OUTPUT_PREFIX=${OUTPUT_PREFIX:-armada-y700}
@@ -633,28 +632,15 @@ umount "$rootfs_dir"
 mounted=0
 e2fsck -f -y "$rootfs_img"
 
-ci_log "checksumming rootfs image"
-raw_sha_file="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.raw.sha256"
-(cd "$OUTPUT_DIR" && sha256sum "$(basename "$rootfs_img")" > "$(basename "$raw_sha_file")")
-
-checksum_file="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.SHA256SUMS"
-build_info="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.BUILD-INFO.txt"
-rm -f "$checksum_file"
-(cd "$OUTPUT_DIR" && sha256sum "$(basename "$build_info")" "$(basename "$raw_sha_file")" > "$(basename "$checksum_file")")
-(cd "$OUTPUT_DIR" && sha256sum "$(basename "$raw_sha_file")" >> "$(basename "$checksum_file")")
-
 case "$COMPRESS" in
   none)
-    (cd "$OUTPUT_DIR" && sha256sum "$(basename "$rootfs_img")" >> "$(basename "$checksum_file")")
     ;;
   zstd)
     ci_require_cmd zstd
     zstd -T0 -19 -f "$rootfs_img" -o "$rootfs_img.zst"
-    (cd "$OUTPUT_DIR" && sha256sum "$(basename "$rootfs_img").zst" >> "$(basename "$checksum_file")")
     ;;
   xz)
     xz -T0 -k -f "$rootfs_img"
-    (cd "$OUTPUT_DIR" && sha256sum "$(basename "$rootfs_img").xz" >> "$(basename "$checksum_file")")
     ;;
   7z)
     ci_require_cmd 7z
@@ -662,10 +648,8 @@ case "$COMPRESS" in
     rm -f "$sevenz_out" "$sevenz_out".*
     if [ -n "${CHUNK_SIZE:-}" ]; then
       7z a "$sevenz_out" "$rootfs_img" -t7z -m0=lzma2 -mx=9 -mmt=on "-v$CHUNK_SIZE" >/dev/null
-      (cd "$OUTPUT_DIR" && sha256sum "$(basename "$sevenz_out")".* >> "$(basename "$checksum_file")")
     else
       7z a "$sevenz_out" "$rootfs_img" -t7z -m0=lzma2 -mx=9 -mmt=on >/dev/null
-      (cd "$OUTPUT_DIR" && sha256sum "$(basename "$sevenz_out")" >> "$(basename "$checksum_file")")
     fi
     ;;
   *) ci_die "unsupported COMPRESS=$COMPRESS" ;;
