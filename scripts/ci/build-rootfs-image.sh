@@ -317,8 +317,29 @@ apply_tb321fu_legacy_cleanup "$rootfs_dir"
 if [ -n "$DEVICE_DEB_ARCHIVE" ]; then
   ci_log "extracting Y700 device debs: $DEVICE_DEB_ARCHIVE"
   device_archive="$work_dir/device-debs.archive"
+  device_extract="$work_dir/device-debs"
   ci_download "$DEVICE_DEB_ARCHIVE" "$device_archive"
-  ci_extract_archive "$device_archive" "$rootfs_dir"
+  ci_extract_archive "$device_archive" "$device_extract"
+
+  # Find and install all .deb files from the archive
+  deb_count=0
+  while IFS= read -r -d '' deb; do
+    install_deb_into_rootfs "$deb" "$rootfs_dir"
+    deb_count=$((deb_count + 1))
+  done < <(find "$device_extract" -type f -name '*.deb' -print0)
+  ci_log "installed $deb_count device .deb packages"
+
+  # Also extract any raw tar overlays (non-deb archives inside)
+  for overlay in "$device_extract"/*.tar "$device_extract"/*.tar.gz "$device_extract"/*.tgz "$device_extract"/*.tar.xz "$device_extract"/*.tar.zst; do
+    [ -e "$overlay" ] || continue
+    ci_log "extracting overlay: $(basename "$overlay")"
+    case "$overlay" in
+      *.tar) tar -C "$rootfs_dir" -xf "$overlay" ;;
+      *.tar.gz|*.tgz) tar -C "$rootfs_dir" -xzf "$overlay" ;;
+      *.tar.xz) tar -C "$rootfs_dir" -xJf "$overlay" ;;
+      *.tar.zst) tar -C "$rootfs_dir" --zstd -xf "$overlay" ;;
+    esac
+  done
 fi
 
 if ci_bool "$APPLY_Y700_FIRMWARE_FIXES"; then
